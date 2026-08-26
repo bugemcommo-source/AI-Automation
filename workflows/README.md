@@ -1,4 +1,4 @@
-# Line 3 Filler — SPC Quality Gate (Simulation)
+# Test Automation — SPC Quality Gate (Simulation)
 
 A credential-free n8n workflow that simulates a real industrial QC process end to end.
 Built for test automation: every branch is reachable on demand, and runs are reproducible.
@@ -7,6 +7,9 @@ Built for test automation: every branch is reachable on demand, and runs are rep
 - **Source of truth:** `line3-spc-quality-gate.ts` (n8n Workflow SDK)
 - **Persistence:** `qc_historian` n8n Data Table (`Z3r9mX5tNXnNYmwD`)
 - **Status:** inactive — activate in the n8n UI to enable the 15-minute schedule
+- **Canvas:** 14 functional nodes + 15 documentation stickies (an intro panel and one
+  card beneath every node stating what it takes in, what it does, its purpose, and
+  what it hands on)
 
 ## Why it needs no credentials
 
@@ -68,6 +71,25 @@ across 12 seeds:
 `drift` is the instructive case: capability still looks acceptable, but the control
 chart catches the sustained run before it turns into scrap. That is the whole point
 of running SPC rules alongside a capability index.
+
+## Reading the canvas
+
+The canvas documents itself. A **README panel** sits above the flow with the scenario,
+what is stubbed versus real, and how to drive it. Beneath each node is a numbered card:
+
+| Card | Node | Hands on |
+|---|---|---|
+| 1 / 1b | Run Test Cycle · Every 15 Min Line Poll | one empty item |
+| 2 | Simulation Config | `line` `profile` `sampleSize` `seed` — **the node you edit** |
+| 3 | Simulate PLC Batch Read | 24 bottle readings (the only fake part) |
+| 4 | Evaluate SPC Rules | 1 verdict item — Cp/Cpk + WE rules |
+| 5 | Route by Verdict | the item, down exactly one of three branches |
+| 6 | Build Line-Stop Command | the `LINE_STOP` payload |
+| 7 | Dispatch Line Stop to MES | echoed payload (side branch, nothing depends on it) |
+| 8 / 9 / 10 | Normalize Critical · Warning · Released | one identical 15-column row |
+| 11 | Collect QC Event | the surviving row |
+| 12 | Write to QC Historian | the stored row + `id` |
+| 13 | Build Shift Report | `report` text + summary fields |
 
 ## Shape of the flow
 

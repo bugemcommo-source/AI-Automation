@@ -3,7 +3,7 @@ import { workflow, node, trigger, sticky, switchCase, merge, expr } from '@n8n/w
 const manualTrigger = trigger({
   type: 'n8n-nodes-base.manualTrigger',
   version: 1,
-  config: { name: 'Run Test Cycle', position: [-220, 180] },
+  config: { name: 'Run Test Cycle', position: [0, 0] },
   output: [{}]
 });
 
@@ -12,7 +12,7 @@ const scheduleTrigger = trigger({
   version: 1.4,
   config: {
     name: 'Every 15 Min Line Poll',
-    position: [-220, 400],
+    position: [0, 440],
     parameters: {
       rule: { interval: [{ field: 'minutes', minutesInterval: 15 }] }
     }
@@ -25,7 +25,7 @@ const simConfig = node({
   version: 3.5,
   config: {
     name: 'Simulation Config',
-    position: [20, 290],
+    position: [360, 0],
     parameters: {
       mode: 'manual',
       includeOtherFields: false,
@@ -47,7 +47,7 @@ const simulateBatch = node({
   version: 2,
   config: {
     name: 'Simulate PLC Batch Read',
-    position: [240, 290],
+    position: [720, 0],
     parameters: {
       mode: 'runOnceForAllItems',
       language: 'javaScript',
@@ -139,7 +139,7 @@ const evaluateSpc = node({
   version: 2,
   config: {
     name: 'Evaluate SPC Rules',
-    position: [470, 290],
+    position: [1080, 0],
     parameters: {
       mode: 'runOnceForAllItems',
       language: 'javaScript',
@@ -246,7 +246,7 @@ const routeByVerdict = switchCase({
   version: 3.4,
   config: {
     name: 'Route by Verdict',
-    position: [700, 290],
+    position: [1440, 0],
     parameters: {
       mode: 'rules',
       rules: {
@@ -296,7 +296,7 @@ const buildLineStop = node({
   version: 2,
   config: {
     name: 'Build Line-Stop Command',
-    position: [940, 60],
+    position: [1800, 440],
     parameters: {
       mode: 'runOnceForAllItems',
       language: 'javaScript',
@@ -329,7 +329,7 @@ const dispatchToMes = node({
   version: 4.5,
   config: {
     name: 'Dispatch Line Stop to MES',
-    position: [1180, -80],
+    position: [2160, 0],
     onError: 'continueRegularOutput',
     parameters: {
       method: 'POST',
@@ -350,7 +350,7 @@ const normalizeCritical = node({
   version: 3.5,
   config: {
     name: 'Normalize Critical Event',
-    position: [1180, 140],
+    position: [2160, 460],
     parameters: {
       mode: 'manual',
       includeOtherFields: false,
@@ -383,7 +383,7 @@ const normalizeWarning = node({
   version: 3.5,
   config: {
     name: 'Normalize Warning Event',
-    position: [940, 330],
+    position: [1800, 1000],
     parameters: {
       mode: 'manual',
       includeOtherFields: false,
@@ -416,7 +416,7 @@ const normalizeReleased = node({
   version: 3.5,
   config: {
     name: 'Normalize Released Batch',
-    position: [940, 560],
+    position: [1800, 1480],
     parameters: {
       mode: 'manual',
       includeOtherFields: false,
@@ -448,7 +448,7 @@ const collectEvents = merge({
   version: 3.2,
   config: {
     name: 'Collect QC Event',
-    position: [1420, 330],
+    position: [2520, 900],
     parameters: { mode: 'append', numberInputs: 3 }
   }
 });
@@ -458,7 +458,7 @@ const writeHistorian = node({
   version: 1.1,
   config: {
     name: 'Write to QC Historian',
-    position: [1640, 330],
+    position: [2880, 900],
     parameters: {
       resource: 'row',
       operation: 'insert',
@@ -474,7 +474,7 @@ const buildShiftReport = node({
   version: 2,
   config: {
     name: 'Build Shift Report',
-    position: [1860, 330],
+    position: [3240, 900],
     parameters: {
       mode: 'runOnceForAllItems',
       language: 'javaScript',
@@ -515,31 +515,127 @@ return [{
   output: [{ verdict: 'WARNING', batch_id: 'B20260826-0915', line: 'LINE-03-FILLER', sim_profile: 'drift', cpk: 0.879, defect_count: 0, line_stopped: false, historian_rows_written: 1, report: '[WARNING] LINE-03-FILLER  batch B20260826-0915  shift A-MORNING' }]
 });
 
-const noteConfig = sticky(
-  '## 1. Simulated plant floor\nThe Code node stands in for a PLC/SCADA batch read on a 500 ml cold-fill bottling line: 24 bottles, each with fill volume, cap torque and product temperature.\n\n**Drive the test from "Simulation Config":**\n- `profile` — `auto` rotates nominal - drift - excursion every minute, or pin it to one of those three to force a branch. At the default seed each profile lands on exactly one verdict: **nominal -> OK**, **drift -> WARNING**, **excursion -> CRITICAL**\n- `seed` — same seed gives byte-identical readings, so this doubles as a regression fixture\n- `sampleSize` — bottles per batch\n\nNo credentials, no network. Swap this node for a real OPC-UA / Modbus / MQTT source later and nothing downstream changes.',
-  [simConfig, simulateBatch],
-  { color: 4 }
-);
+const readme = sticky("# Line 3 Filler — SPC Quality Gate\n## A simulated bottling-line quality check. Runs with zero credentials.\n\n**The story this acts out:** a factory line fills 500 ml bottles. Every 15 minutes, quality control pulls **24 bottles** off the line and measures each one — how full it is, how tight the cap is, how cold the product is. Statistics then decide whether the batch ships, needs a maintenance ticket, or is bad enough to stop the line.\n\n**Why it exists:** every external system is stubbed, so this runs on a brand-new n8n instance with nothing connected. Only the *sensor* is fake — the quality maths, the routing, the storage and the audit trail are all real.\n\n| Real factory part | Stood in by |\n| --- | --- |\n| PLC / SCADA sensor read | `Simulate PLC Batch Read` — a seeded generator |\n| Plant historian database | `qc_historian` — an n8n Data Table |\n| MES line-stop endpoint | `Dispatch Line Stop to MES` — a public echo service |\n\n### Three possible outcomes\n**OK** → release the batch  ·  **WARNING** → raise a maintenance ticket  ·  **CRITICAL** → stop the line and quarantine\n\n### How to drive it\nOpen **Simulation Config** and set `profile` to `nominal`, `drift` or `excursion` to force any outcome you want. The same `seed` produces identical bottles every run, so this doubles as a regression test.\n\n### How to read this canvas\nLeft to right. **Every node has a numbered card beneath it** explaining what it takes in, what it does, why it is there, and what it hands on.", [], {
+  name: "README",
+  position: [0, -660],
+  width: 1560,
+  height: 580,
+  color: 7
+});
 
-const noteSpc = sticky(
-  '## 2. The real logic under test\nTextbook statistical process control, exactly as a QA engineer would specify it:\n\n- **Cp / Cpk** capability indices against the 495-505 ml spec window\n- **Western Electric rules 1-4** on the control chart (3-sigma point, 2-of-3 beyond 2-sigma, 4-of-5 beyond 1-sigma, 8-run on one side), scored against the **established baseline sigma of 1.20 ml** from process qualification - not against the batch's own spread, which would only ever measure shape\n- Secondary gates on cap torque (1.4-2.2 Nm) and fill temperature (2-8 C)\n\n**Verdict:** CRITICAL if any bottle is out of spec or Cpk < 1.00 - WARNING if Cpk < 1.33 or any WE rule fires - otherwise OK.',
-  [evaluateSpc, routeByVerdict],
-  { color: 3 }
-);
+const card01 = sticky("### 1 · Run Test Cycle\n`Manual Trigger`\n\n**Does:** starts one QC cycle the moment you hit Execute.\n\n**Takes in:** nothing.\n\n**Purpose:** lets you run any scenario on demand instead of waiting for the clock.\n\n**Hands on:** one empty item `{}`.", [], {
+  name: "Card 01 Run Test Cycle",
+  position: [0, 140],
+  width: 300,
+  height: 240,
+  color: 7
+});
 
-const noteMes = sticky(
-  '## 3. The only outbound call\nPosts the line-stop command to a public echo endpoint that reflects the payload back, so you can inspect the exact JSON a real MES would receive.\n\n`onError: continueRegularOutput` keeps the run green if the network is blocked, and this sits on a side branch so the historian write never depends on it.\n\n**To go live:** change the URL to your MES/SCADA endpoint and add credentials - or replace the node with Slack / PagerDuty / Telegram.',
-  [dispatchToMes],
-  { color: 5 }
-);
+const card01b = sticky("### 1b · Every 15 Min Line Poll\n`Schedule Trigger`\n\n**Does:** fires by itself every 15 minutes.\n\n**Takes in:** nothing — the clock starts it.\n\n**Purpose:** the production cadence, mimicking QC sampling the line each quarter hour.\n\n**Hands on:** one empty item `{}`.\n\n⚠️ Only fires while the workflow is **Active**.", [], {
+  name: "Card 01b Schedule",
+  position: [0, 580],
+  width: 300,
+  height: 260,
+  color: 7
+});
 
-const noteHistorian = sticky(
-  '## 4. Persistence and reporting\nAll three branches normalise to one identical row shape before converging, so the historian write is a single node instead of three.\n\nRows land in the **qc_historian** n8n Data Table - built-in storage, no credentials - which is your audit trail across executions. The report node renders the shift summary you would paste into a handover.',
-  [collectEvents, writeHistorian, buildShiftReport],
-  { color: 6 }
-);
+const card02 = sticky("### 2 · Simulation Config\n`Edit Fields (Set)`\n\n**Does:** defines the four knobs that steer the entire run.\n\n**Takes in:** the empty item from either trigger.\n\n**Purpose:** one place to control the test, with no code editing.\n\n**Hands on:** one config item —\n`line` = LINE-03-FILLER\n`profile` = nominal · drift · excursion · auto\n`sampleSize` = 24\n`seed` = 4242\n\n👉 **This is the node you edit.**", [], {
+  name: "Card 02 Simulation Config",
+  position: [360, 140],
+  width: 300,
+  height: 300,
+  color: 4
+});
 
-export default workflow('line3-spc-quality-gate', 'Line 3 Filler - SPC Quality Gate (Simulation)')
+const card03 = sticky("### 3 · Simulate PLC Batch Read\n`Code` · once for all items\n\n**Does:** invents 24 bottle measurements from a seeded random generator.\n\n**Takes in:** the config item.\n\n**Purpose:** stands in for a real PLC/SCADA read. **The only fake part of this workflow.**\n\n**Hands on:** **24 items**, one per bottle —\n`fill_ml` `cap_torque_nm` `line_temp_c`\n`seq` `head` `batch_id` `shift`\nplus spec limits and `sigma_0`.\n\nSame seed ⇒ identical bottles every run.", [], {
+  name: "Card 03 Simulate PLC",
+  position: [720, 140],
+  width: 300,
+  height: 300,
+  color: 4
+});
+
+const card04 = sticky("### 4 · Evaluate SPC Rules\n`Code` · once for all items\n\n**Does:** the actual quality maths. **This is the logic under test.**\n\n**Takes in:** all 24 bottle readings.\n\n**Purpose:** collapse 24 measurements into one defensible verdict.\n\nComputes **Cp / Cpk** (capability against the 495–505 ml spec) and **Western Electric rules 1–4**, scored against the qualified baseline sigma of 1.20 ml.\n\n**Hands on:** **1 item** — the batch verdict:\n`verdict` `action` `cpk` `cp`\n`mean_fill_ml` `defect_count` `we_violations`", [], {
+  name: "Card 04 Evaluate SPC",
+  position: [1080, 140],
+  width: 300,
+  height: 320,
+  color: 5
+});
+
+const card05 = sticky("### 5 · Route by Verdict\n`Switch`\n\n**Does:** sends the batch down exactly one of three paths.\n\n**Takes in:** the single verdict item.\n\n**Purpose:** one severity, one response. No batch takes two paths.\n\n**Hands on:** the same item, out of one branch only —\n**0** `CRITICAL` → stop the line\n**1** `WARNING` → raise a ticket\n**2** `OK` → release the batch", [], {
+  name: "Card 05 Route by Verdict",
+  position: [1440, 140],
+  width: 300,
+  height: 280,
+  color: 3
+});
+
+const card06 = sticky("### 6 · Build Line-Stop Command\n`Code` · CRITICAL branch only\n\n**Does:** writes the machine-readable stop order.\n\n**Takes in:** the CRITICAL verdict item.\n\n**Purpose:** the exact payload a real MES/SCADA system would accept to halt the filler.\n\n**Hands on:** one command object —\n`command: LINE_STOP`\n`reason_code` `reason_text`\n`quarantine` `offending_samples`\n`operator_ack_required`", [], {
+  name: "Card 06 Build Line-Stop",
+  position: [1800, 580],
+  width: 300,
+  height: 280,
+  color: 3
+});
+
+const card07 = sticky("### 7 · Dispatch Line Stop to MES\n`HTTP Request` · side branch\n\n**Does:** POSTs the stop command to a public echo service that reflects it straight back.\n\n**Takes in:** the line-stop command.\n\n**Purpose:** proves the outbound call works and lets you inspect the exact JSON a real MES would receive.\n\n**Hands on:** the echoed payload. Nothing downstream depends on it.\n\n🔧 **To go live:** point the URL at your MES, or swap for Slack / PagerDuty.", [], {
+  name: "Card 07 Dispatch to MES",
+  position: [2160, 140],
+  width: 300,
+  height: 300,
+  color: 3
+});
+
+const card08 = sticky("### 8 · Normalize Critical Event\n`Edit Fields (Set)`\n\n**Does:** reshapes the batch into the standard 15-column historian row.\n\n**Takes in:** reads back from `Evaluate SPC Rules` — the command object has already replaced `$json` on this branch.\n\n**Purpose:** so all three branches converge on one identical shape.\n\n**Hands on:** 1 row ·\n`verdict: CRITICAL` · `line_stopped: true`", [], {
+  name: "Card 08 Normalize Critical",
+  position: [2160, 600],
+  width: 300,
+  height: 280,
+  color: 3
+});
+
+const card09 = sticky("### 9 · Normalize Warning Event\n`Edit Fields (Set)`\n\n**Does:** the same reshaping, on the warning path.\n\n**Takes in:** the WARNING verdict item.\n\n**Purpose:** identical row shape to the other two branches.\n\n**Hands on:** 1 row ·\n`verdict: WARNING` · `line_stopped: false`", [], {
+  name: "Card 09 Normalize Warning",
+  position: [1800, 1140],
+  width: 300,
+  height: 240,
+  color: 2
+});
+
+const card10 = sticky("### 10 · Normalize Released Batch\n`Edit Fields (Set)`\n\n**Does:** the same reshaping, on the clean path.\n\n**Takes in:** the OK verdict item.\n\n**Purpose:** identical row shape to the other two branches.\n\n**Hands on:** 1 row ·\n`verdict: OK` · `line_stopped: false`", [], {
+  name: "Card 10 Normalize Released",
+  position: [1800, 1620],
+  width: 300,
+  height: 240,
+  color: 4
+});
+
+const card11 = sticky("### 11 · Collect QC Event\n`Merge` · append, 3 inputs\n\n**Does:** funnels the three branches back into a single stream.\n\n**Takes in:** whichever one branch actually ran. The other two are empty.\n\n**Purpose:** lets one storage node serve all three outcomes instead of three duplicates.\n\n**Hands on:** 1 normalized row.", [], {
+  name: "Card 11 Collect QC Event",
+  position: [2520, 1040],
+  width: 300,
+  height: 260,
+  color: 6
+});
+
+const card12 = sticky("### 12 · Write to QC Historian\n`Data table` · insert\n\n**Does:** appends the row to the **qc_historian** table.\n\n**Takes in:** the normalized row, auto-mapped by column name.\n\n**Purpose:** the permanent audit trail — the only thing that outlives the execution.\n\n**Hands on:** the stored row plus `id` and `createdAt`.\n\n✅ No credentials: storage is built into n8n.", [], {
+  name: "Card 12 Write to Historian",
+  position: [2880, 1040],
+  width: 300,
+  height: 280,
+  color: 6
+});
+
+const card13 = sticky("### 13 · Build Shift Report\n`Code` · once for all items\n\n**Does:** renders the human-readable handover summary.\n\n**Takes in:** the stored row, plus a look back at `Evaluate SPC Rules` for the full statistics.\n\n**Purpose:** the part a person actually reads at shift change.\n\n**Hands on:** 1 item —\n`report` (multi-line text) `verdict`\n`cpk` `line_stopped` `historian_rows_written`", [], {
+  name: "Card 13 Build Shift Report",
+  position: [3240, 1040],
+  width: 300,
+  height: 280,
+  color: 6
+});
+
+export default workflow('line3-spc-quality-gate', 'Test Automation - SPC Quality Gate (Simulation)')
   .add(manualTrigger)
   .to(simConfig)
   .to(simulateBatch)
@@ -555,7 +651,18 @@ export default workflow('line3-spc-quality-gate', 'Line 3 Filler - SPC Quality G
   .add(collectEvents)
   .to(writeHistorian)
   .to(buildShiftReport)
-  .add(noteConfig)
-  .add(noteSpc)
-  .add(noteMes)
-  .add(noteHistorian);
+  .add(readme)
+  .add(card01)
+  .add(card01b)
+  .add(card02)
+  .add(card03)
+  .add(card04)
+  .add(card05)
+  .add(card06)
+  .add(card07)
+  .add(card08)
+  .add(card09)
+  .add(card10)
+  .add(card11)
+  .add(card12)
+  .add(card13);
