@@ -23,6 +23,23 @@ Compose Post (form)
   → Show Result (completion page)
 ```
 
+## Reading the canvas
+
+The canvas documents itself: an **overview panel** across the top (what it does, the
+four problems it solves, the two honest limits, how to read it), plus a numbered card
+beneath every one of the 20 functional nodes stating what it does, what it takes in,
+its purpose, and what it hands on.
+
+| Cards | Stage |
+|---|---|
+| 1–3 | Collect and persist the submission |
+| 4–5 | Split per platform and route |
+| 6–17 | Six publish branches, each paired with its own result recorder |
+| 18–20 | Converge, log, confirm |
+
+Colour-coded by stage: grey intake, green persistence, blue fan-out, amber publish,
+red recording, purple storage.
+
 ## Character ceilings
 
 `Expand to Targets` trims each copy to the platform's real limit and preserves the

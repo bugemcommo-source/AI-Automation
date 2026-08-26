@@ -41,7 +41,7 @@ const normalize = node({
   version: 3.5,
   config: {
     name: 'Normalize Submission',
-    position: [300, 0],
+    position: [360, 0],
     parameters: {
       mode: 'manual',
       includeOtherFields: false,
@@ -66,7 +66,7 @@ const storeSubmission = node({
   version: 1.1,
   config: {
     name: 'Store Submission',
-    position: [600, 0],
+    position: [720, 0],
     parameters: {
       resource: 'row',
       operation: 'insert',
@@ -82,7 +82,7 @@ const expandTargets = node({
   version: 2,
   config: {
     name: 'Expand to Targets',
-    position: [900, 0],
+    position: [1080, 0],
     parameters: {
       mode: 'runOnceForAllItems',
       language: 'javaScript',
@@ -144,7 +144,7 @@ const routePlatform = switchCase({
   version: 3.4,
   config: {
     name: 'Route by Platform',
-    position: [1200, 0],
+    position: [1440, 0],
     parameters: {
       mode: 'rules',
       rules: {
@@ -167,7 +167,7 @@ const postX = node({
   version: 2,
   config: {
     name: 'Post to X',
-    position: [1520, -520],
+    position: [1800, 420],
     onError: 'continueRegularOutput',
     parameters: { resource: 'tweet', operation: 'create', text: expr('{{ $json.text }}') },
     credentials: { twitterOAuth2Api: newCredential('X / Twitter') }
@@ -180,7 +180,7 @@ const postLinkedIn = node({
   version: 1,
   config: {
     name: 'Post to LinkedIn',
-    position: [1520, -320],
+    position: [1800, 840],
     onError: 'continueRegularOutput',
     parameters: {
       resource: 'post',
@@ -201,7 +201,7 @@ const postFacebook = node({
   version: 1,
   config: {
     name: 'Post to Facebook Page',
-    position: [1520, -120],
+    position: [1800, 1260],
     onError: 'continueRegularOutput',
     parameters: {
       authType: 'accessToken',
@@ -226,7 +226,7 @@ const postTelegram = node({
   version: 1.2,
   config: {
     name: 'Post to Telegram',
-    position: [1520, 80],
+    position: [1800, 1680],
     onError: 'continueRegularOutput',
     parameters: {
       resource: 'message',
@@ -245,7 +245,7 @@ const postDiscord = node({
   version: 2,
   config: {
     name: 'Post to Discord',
-    position: [1520, 280],
+    position: [1800, 2100],
     onError: 'continueRegularOutput',
     parameters: {
       authentication: 'botToken',
@@ -264,7 +264,7 @@ const postReddit = node({
   version: 1,
   config: {
     name: 'Post to Reddit',
-    position: [1520, 480],
+    position: [1800, 2520],
     onError: 'continueRegularOutput',
     parameters: {
       resource: 'post',
@@ -282,7 +282,7 @@ const postReddit = node({
 const stampX = node({
   type: 'n8n-nodes-base.code',
   version: 2,
-  config: { name: 'Record X Result', position: [1840, -520], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'x';
+  config: { name: 'Record X Result', position: [2160, 420], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'x';
 
 const s = $('Normalize Submission').first().json;
 const targets = $('Expand to Targets').all().map(function (i) { return i.json; });
@@ -316,7 +316,7 @@ return [{
 const stampLinkedIn = node({
   type: 'n8n-nodes-base.code',
   version: 2,
-  config: { name: 'Record LinkedIn Result', position: [1840, -320], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'linkedin';
+  config: { name: 'Record LinkedIn Result', position: [2160, 840], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'linkedin';
 
 const s = $('Normalize Submission').first().json;
 const targets = $('Expand to Targets').all().map(function (i) { return i.json; });
@@ -350,7 +350,7 @@ return [{
 const stampFacebook = node({
   type: 'n8n-nodes-base.code',
   version: 2,
-  config: { name: 'Record Facebook Result', position: [1840, -120], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'facebook';
+  config: { name: 'Record Facebook Result', position: [2160, 1260], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'facebook';
 
 const s = $('Normalize Submission').first().json;
 const targets = $('Expand to Targets').all().map(function (i) { return i.json; });
@@ -384,7 +384,7 @@ return [{
 const stampTelegram = node({
   type: 'n8n-nodes-base.code',
   version: 2,
-  config: { name: 'Record Telegram Result', position: [1840, 80], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'telegram';
+  config: { name: 'Record Telegram Result', position: [2160, 1680], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'telegram';
 
 const s = $('Normalize Submission').first().json;
 const targets = $('Expand to Targets').all().map(function (i) { return i.json; });
@@ -418,7 +418,7 @@ return [{
 const stampDiscord = node({
   type: 'n8n-nodes-base.code',
   version: 2,
-  config: { name: 'Record Discord Result', position: [1840, 280], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'discord';
+  config: { name: 'Record Discord Result', position: [2160, 2100], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'discord';
 
 const s = $('Normalize Submission').first().json;
 const targets = $('Expand to Targets').all().map(function (i) { return i.json; });
@@ -452,7 +452,7 @@ return [{
 const stampReddit = node({
   type: 'n8n-nodes-base.code',
   version: 2,
-  config: { name: 'Record Reddit Result', position: [1840, 480], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'reddit';
+  config: { name: 'Record Reddit Result', position: [2160, 2520], parameters: { mode: 'runOnceForAllItems', language: 'javaScript', jsCode: `const PLATFORM = 'reddit';
 
 const s = $('Normalize Submission').first().json;
 const targets = $('Expand to Targets').all().map(function (i) { return i.json; });
@@ -487,7 +487,7 @@ const collectResults = merge({
   version: 3.2,
   config: {
     name: 'Collect Delivery Results',
-    position: [2180, -20],
+    position: [2520, 1260],
     parameters: { mode: 'append', numberInputs: 6 }
   }
 });
@@ -497,7 +497,7 @@ const logDelivery = node({
   version: 1.1,
   config: {
     name: 'Log Delivery',
-    position: [2480, -20],
+    position: [2880, 1260],
     parameters: {
       resource: 'row',
       operation: 'insert',
@@ -513,7 +513,7 @@ const done = node({
   version: 2.5,
   config: {
     name: 'Show Result',
-    position: [2780, -20],
+    position: [3240, 1260],
     parameters: {
       operation: 'completion',
       respondWith: 'text',
@@ -524,29 +524,173 @@ const done = node({
   output: [{}]
 });
 
-const noteIntro = sticky(
-  '## Social Post Distributor\n\nWrite a post once, choose the channels, and let n8n fan it out. Every attempt is logged per platform — including failures — so you always know what actually went live.\n\n**Nothing here runs until you connect credentials.** Each platform node has an empty credential slot waiting in the n8n UI. Connect only the platforms you actually want; unselected ones never execute.\n\n**Not available as nodes:** Instagram and Mastodon. Instagram posting only works through the Facebook Graph API with a Business account linked to a Page.',
-  [composeForm, normalize, storeSubmission],
-  { color: 7 }
-);
+const readme = sticky("# Social Post Distributor\n## Write once. Publish to six platforms. Log every outcome.\n\n**What it does:** you fill in one short form — the post text, an optional link, and which channels you want. n8n then sends a correctly-sized copy to each platform you ticked, and records exactly what happened on every one.\n\n| The problem | How this handles it |\n| --- | --- |\n| Platforms have wildly different length limits | Each copy is trimmed to that platform's own ceiling, and flagged when it was trimmed |\n| One platform failing could kill the whole run | Every publish node continues on error — the others still go out |\n| \"Did it actually post?\" | Every attempt writes a row: sent or failed, with the platform's own reference or the error text |\n| Losing the post if everything fails | The raw submission is saved **before** anything is sent |\n\n### Two honest limits\n**No Instagram or Mastodon node exists in n8n.** Instagram posting requires the Facebook Graph API with a Business account linked to a Page, and a different two-step flow — it is not a drop-in seventh branch.\n**Nothing runs until you connect credentials** in Settings → Credentials. Connect only the platforms you actually want; the rest never execute.\n\n### How to read this canvas\nLeft to right, then top to bottom through the six branches. **Every node has a numbered card beneath it** — what it takes in, what it does, why it is there, and what it hands on.", [], {
+  name: "README",
+  position: [0, -620],
+  width: 1700,
+  height: 500,
+  color: 7
+});
 
-const noteExpand = sticky(
-  '## Fan out, one item per channel\n\n`Expand to Targets` turns a single submission into one item per selected platform, and trims the text to that platform\'s real character ceiling:\n\n**X** 280 · **Discord** 2,000 · **LinkedIn** 3,000 · **Telegram** 4,096 · **Reddit** 40,000 · **Facebook** 63,206\n\nWhen a trim happens the item carries `truncated: true`, so the log tells you honestly that the audience saw a shortened version.',
-  [expandTargets, routePlatform],
-  { color: 4 }
-);
+const card01 = sticky("### 1 · Compose Post\n`n8n Form Trigger`\n\n**Does:** shows a public web form and starts a run when someone submits it.\n\n**Takes in:** nothing — a person fills it in.\n\n**Purpose:** one place to write the post, needing no n8n knowledge.\n\n**Hands on:** `Post text` · `Link` · `Platforms` · `Subreddit` · `Reddit title`", [], {
+  name: "Card 01 Compose Post",
+  position: [0, 140],
+  width: 300,
+  height: 240,
+  color: 7
+});
 
-const notePublish = sticky(
-  '## Publish\n\nEvery platform node is set to `continueRegularOutput`, so **one platform failing never blocks the others**. A failed post produces an item carrying an error instead of stopping the run.\n\nFields still needing your input once credentials exist: the LinkedIn person URN, the Facebook Page ID, the Telegram chat ID, and the Discord server + channel pickers.',
-  [postX, postReddit],
-  { color: 3 }
-);
+const card02 = sticky("### 2 · Normalize Submission\n`Edit Fields (Set)`\n\n**Does:** turns the form's human labels into clean field names and stamps an ID.\n\n**Takes in:** the raw form submission.\n\n**Purpose:** you can reword the form later without breaking everything downstream.\n\n**Hands on:** `post_id` `submitted_at` `post_text` `link` `platforms` (lowercase CSV) + the Reddit fields", [], {
+  name: "Card 02 Normalize",
+  position: [360, 140],
+  width: 300,
+  height: 260,
+  color: 4
+});
 
-const noteLog = sticky(
-  '## Record every outcome\n\nEach branch records its own result, so the log never guesses which platform an API response came from.\n\nRows land in **social_post_log** with `status` (sent / failed), the exact `text_sent`, `char_count` against `char_limit`, whether it was `truncated`, the platform\'s own `remote_ref`, and the `error` when there was one. Raw submissions are kept separately in **social_post_submissions**.',
-  [collectResults, logDelivery, done],
-  { color: 6 }
-);
+const card03 = sticky("### 3 · Store Submission\n`Data table` · insert\n\n**Does:** saves the submission to **social_post_submissions** before a single post is sent.\n\n**Takes in:** the normalized fields.\n\n**Purpose:** if every platform fails, the post itself is still never lost.\n\n**Hands on:** the stored row + `id`.\n\n⚠️ Its output is the row, **not** your data — which is why the next node reads back from step 2.", [], {
+  name: "Card 03 Store Submission",
+  position: [720, 140],
+  width: 300,
+  height: 280,
+  color: 4
+});
+
+const card04 = sticky("### 4 · Expand to Targets\n`Code` · once for all items\n\n**Does:** turns one submission into one item per chosen platform, trimming each copy to that platform's limit and keeping the link on the end.\n\n**Takes in:** reads back from `Normalize Submission`.\n\n**Purpose:** a 400-character post is fine on LinkedIn and illegal on X.\n\n**Hands on:** N items — `platform` `text` `char_count` `char_limit` `truncated`\n\nX 280 · Discord 2k · LinkedIn 3k\nTelegram 4k · Reddit 40k · Facebook 63k", [], {
+  name: "Card 04 Expand to Targets",
+  position: [1080, 140],
+  width: 300,
+  height: 320,
+  color: 5
+});
+
+const card05 = sticky("### 5 · Route by Platform\n`Switch` · 6 outputs\n\n**Does:** sends each item down the branch built for its own platform.\n\n**Takes in:** one item per chosen platform.\n\n**Purpose:** every service needs a different node and different fields.\n\n**Hands on:** the same item, on exactly one of six outputs. Platforms you did not tick produce nothing at all.", [], {
+  name: "Card 05 Route by Platform",
+  position: [1440, 140],
+  width: 300,
+  height: 260,
+  color: 5
+});
+
+const card06 = sticky("### 6 · Post to X\n`X (Twitter)` · tweet → create\n\n**Does:** publishes the trimmed copy as a tweet.\n\n**Takes in:** the item routed to this branch.\n\n**Needs:** a `twitterOAuth2Api` credential.\n\n**Hands on:** the API response — tweet `id`.\n\n🔁 `continueRegularOutput` — failing here cannot stop the other branches.", [], {
+  name: "Card 06 Post to X",
+  position: [1800, 560],
+  width: 300,
+  height: 250,
+  color: 2
+});
+
+const card07 = sticky("### 7 · Record X Result\n`Code` · once for all items\n\n**Does:** builds the log row for this branch.\n\n**Takes in:** the X response, plus a look back at steps 2 and 4 for the text and limits.\n\n**Purpose:** platform is hardcoded per branch, so log attribution is never a guess.\n\n**Hands on:** 1 row — `status` · `text_sent` · `truncated` · `remote_ref` from tweet `id` · `error`", [], {
+  name: "Card 07 Record X",
+  position: [2160, 560],
+  width: 300,
+  height: 250,
+  color: 3
+});
+
+const card08 = sticky("### 8 · Post to LinkedIn\n`LinkedIn` · post → create\n\n**Does:** publishes the copy as a public post from a person.\n\n**Takes in:** the item routed to this branch.\n\n**Needs:** a `linkedInOAuth2Api` credential **and your person URN** — pick it from the list once connected.\n\n**Hands on:** the share `urn`.", [], {
+  name: "Card 08 Post to LinkedIn",
+  position: [1800, 980],
+  width: 300,
+  height: 250,
+  color: 2
+});
+
+const card09 = sticky("### 9 · Record LinkedIn Result\n`Code` · once for all items\n\n**Does:** builds the log row for this branch.\n\n**Takes in:** the LinkedIn response, plus the text and limits from steps 2 and 4.\n\n**Purpose:** same shape as every other branch, so one storage node can serve them all.\n\n**Hands on:** 1 row — `remote_ref` from the share `urn`.", [], {
+  name: "Card 09 Record LinkedIn",
+  position: [2160, 980],
+  width: 300,
+  height: 250,
+  color: 3
+});
+
+const card10 = sticky("### 10 · Post to Facebook Page\n`Facebook Graph API`\n\n**Does:** POSTs the copy to your Page's `/feed` edge.\n\n**Takes in:** the item routed to this branch.\n\n**Needs:** a `facebookGraphApi` credential **and your Page ID**.\n\n**Hands on:** the new post `id`.\n\nℹ️ There is no dedicated Facebook post node — the Graph API node is the supported route.", [], {
+  name: "Card 10 Post to Facebook",
+  position: [1800, 1400],
+  width: 300,
+  height: 260,
+  color: 2
+});
+
+const card11 = sticky("### 11 · Record Facebook Result\n`Code` · once for all items\n\n**Does:** builds the log row for this branch.\n\n**Takes in:** the Graph API response, plus the text and limits from steps 2 and 4.\n\n**Purpose:** turns a raw API reply into the same 11-column row every branch produces.\n\n**Hands on:** 1 row — `remote_ref` from the post `id`.", [], {
+  name: "Card 11 Record Facebook",
+  position: [2160, 1400],
+  width: 300,
+  height: 250,
+  color: 3
+});
+
+const card12 = sticky("### 12 · Post to Telegram\n`Telegram` · message → sendMessage\n\n**Does:** sends the copy to a channel, group or chat.\n\n**Takes in:** the item routed to this branch.\n\n**Needs:** a `telegramApi` bot credential **and the chat ID**.\n\n**Hands on:** `result.message_id`.\n\n✅ n8n's \"sent automatically\" footer is switched off.", [], {
+  name: "Card 12 Post to Telegram",
+  position: [1800, 1820],
+  width: 300,
+  height: 250,
+  color: 2
+});
+
+const card13 = sticky("### 13 · Record Telegram Result\n`Code` · once for all items\n\n**Does:** builds the log row for this branch.\n\n**Takes in:** the Telegram response, plus the text and limits from steps 2 and 4.\n\n**Purpose:** keeps Telegram's nested reply shape out of the log table.\n\n**Hands on:** 1 row — `remote_ref` from `result.message_id`.", [], {
+  name: "Card 13 Record Telegram",
+  position: [2160, 1820],
+  width: 300,
+  height: 250,
+  color: 3
+});
+
+const card14 = sticky("### 14 · Post to Discord\n`Discord` · message → send\n\n**Does:** posts the copy into a channel as a bot.\n\n**Takes in:** the item routed to this branch.\n\n**Needs:** a `discordBotApi` credential, then **pick the server and channel** — both pickers are empty until the credential exists.\n\n**Hands on:** the message `id`.", [], {
+  name: "Card 14 Post to Discord",
+  position: [1800, 2240],
+  width: 300,
+  height: 250,
+  color: 2
+});
+
+const card15 = sticky("### 15 · Record Discord Result\n`Code` · once for all items\n\n**Does:** builds the log row for this branch.\n\n**Takes in:** the Discord response, plus the text and limits from steps 2 and 4.\n\n**Purpose:** one row shape regardless of which service replied.\n\n**Hands on:** 1 row — `remote_ref` from the message `id`.", [], {
+  name: "Card 15 Record Discord",
+  position: [2160, 2240],
+  width: 300,
+  height: 250,
+  color: 3
+});
+
+const card16 = sticky("### 16 · Post to Reddit\n`Reddit` · post → create\n\n**Does:** submits a self (text) post to a subreddit.\n\n**Takes in:** the item routed to this branch.\n\n**Needs:** a `redditOAuth2Api` credential.\n\n⚠️ **Unlike the others, this one needs per-post input:** the `Subreddit` and `Reddit title` fields on the form. Leave them blank and Reddit will reject the post.\n\n**Hands on:** `name` (e.g. `t3_abc123`).", [], {
+  name: "Card 16 Post to Reddit",
+  position: [1800, 2660],
+  width: 300,
+  height: 260,
+  color: 2
+});
+
+const card17 = sticky("### 17 · Record Reddit Result\n`Code` · once for all items\n\n**Does:** builds the log row for this branch.\n\n**Takes in:** the Reddit response, plus the text and limits from steps 2 and 4.\n\n**Purpose:** a missing title or subreddit shows up here as a real logged failure, not silence.\n\n**Hands on:** 1 row — `remote_ref` from `name`.", [], {
+  name: "Card 17 Record Reddit",
+  position: [2160, 2660],
+  width: 300,
+  height: 250,
+  color: 3
+});
+
+const card18 = sticky("### 18 · Collect Delivery Results\n`Merge` · append, 6 inputs\n\n**Does:** funnels the six branches back into a single stream.\n\n**Takes in:** only the branches that actually ran — the rest arrive empty.\n\n**Purpose:** lets one storage node serve every platform instead of six near-copies.\n\n**Hands on:** one row per platform attempted.", [], {
+  name: "Card 18 Collect Results",
+  position: [2520, 1400],
+  width: 300,
+  height: 250,
+  color: 6
+});
+
+const card19 = sticky("### 19 · Log Delivery\n`Data table` · insert\n\n**Does:** appends every row to **social_post_log**.\n\n**Takes in:** the merged rows, auto-mapped by column name.\n\n**Purpose:** the record of what actually went out — your answer to \"did it post?\"\n\n**Hands on:** the stored rows + `id`.\n\n✅ Built into n8n. No credentials needed for this step.", [], {
+  name: "Card 19 Log Delivery",
+  position: [2880, 1400],
+  width: 300,
+  height: 270,
+  color: 6
+});
+
+const card20 = sticky("### 20 · Show Result\n`n8n Form` · completion\n\n**Does:** shows the confirmation page to whoever submitted the form.\n\n**Takes in:** the stored log rows.\n\n**Purpose:** closes the loop for the person, instead of leaving a form spinning.\n\n**Hands on:** nothing — this is the end of the run.\n\nℹ️ The execution sits in `waiting` until a browser collects this page. Normal for n8n forms.", [], {
+  name: "Card 20 Show Result",
+  position: [3240, 1400],
+  width: 300,
+  height: 270,
+  color: 6
+});
 
 export default workflow('social-post-distributor', 'Social Post Distributor')
   .add(composeForm)
@@ -563,7 +707,24 @@ export default workflow('social-post-distributor', 'Social Post Distributor')
   .add(collectResults)
   .to(logDelivery)
   .to(done)
-  .add(noteIntro)
-  .add(noteExpand)
-  .add(notePublish)
-  .add(noteLog);
+  .add(readme)
+  .add(card01)
+  .add(card02)
+  .add(card03)
+  .add(card04)
+  .add(card05)
+  .add(card06)
+  .add(card07)
+  .add(card08)
+  .add(card09)
+  .add(card10)
+  .add(card11)
+  .add(card12)
+  .add(card13)
+  .add(card14)
+  .add(card15)
+  .add(card16)
+  .add(card17)
+  .add(card18)
+  .add(card19)
+  .add(card20);
