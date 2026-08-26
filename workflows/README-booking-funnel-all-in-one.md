@@ -21,7 +21,32 @@ they never interfere with one another.
 | **D** Booking form | the form trigger's public URL | Checks the slot, holds it, shows a simulated deposit link |
 | **E** Payment callback | `GET /webhook/pay?booking_id=…&outcome=success` | Re-checks the slot, records payment, sends receipt + SMS |
 | **F** Nurture sweep | hourly schedule | Chases bookings stalled over 24h, exactly once each |
-| **G** Dashboard | `GET /webhook/dashboard` | Renders one HTML page from all five tables |
+| **G** Dashboard | `GET /webhook/dashboard` | Renders one HTML page from all five tables, or exports JSON/CSV |
+
+## Dashboard exports
+
+`G9` computes every aggregate once, then `G10` routes on `?format=` so the three
+formats can never drift apart:
+
+| Request | Serves | Built for |
+| --- | --- | --- |
+| `/webhook/dashboard` | the HTML page | humans |
+| `?format=json` | all five datasets in one object | Power BI **Web** connector, Looker Studio |
+| `?format=csv` | CSV of one dataset | Salesforce, GoHighLevel |
+
+For CSV, `?dataset=` picks the table — `leads` (the default), `events`,
+`funnel` or `posts`. An unrecognised `format` falls back to the page rather
+than erroring.
+
+`leads` is the default because that is what a CRM ingests: one row per person
+stalled mid-funnel, with `preferred_channel` already resolved to `sms` or
+`email` so the import maps straight onto a follow-up campaign. `events` is the
+flat fact table — one row per click, booking, message, notification and
+failure, with a `fact_type` discriminator — which is the shape BI tools model
+best.
+
+Salesforce and GoHighLevel *pushes* would need real credentials; CSV pull-in
+needs none, which is why the simulation stops there.
 
 ## What is simulated
 
@@ -86,7 +111,9 @@ Every branch was run against the live instance, both sides of every `If`:
   `not_found` without touching money.
 - **F** — chases a 24h-stalled booking by SMS and stamps `chase_count`; the
   next sweep finds nothing and stops cleanly.
-- **G** — counts reconcile against the tables.
+- **G** — counts reconcile against the tables; `?format=json` returns all five
+  datasets, `?format=csv` defaults to leads, `?dataset=` selects correctly, and
+  an unknown format falls back to the page.
 - **A** — a simulated failure lands in `ops_events` with node, message and
   execution URL intact.
 
@@ -95,6 +122,11 @@ Every branch was run against the live instance, both sides of every `If`:
 **Empty string into a date column.** `bookings` types six columns as dates,
 and the data table node rejects `''` for those. `D5`, `E7` and `F6` now emit
 `null` for an absent date.
+
+**CSV quoting.** The `events` dataset carries message bodies containing commas
+(`4,500 PHP`) and embedded newlines. Verified against live data: those fields
+come out wrapped in quotes with the newlines preserved, plain fields stay
+unquoted — valid RFC 4180, so a CRM importer will not shear rows apart.
 
 **Chained reads multiplying each other.** `G2`–`G6` run in series, so each
 one ran once per item the previous read returned and the dashboard counted

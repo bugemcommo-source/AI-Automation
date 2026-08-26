@@ -1,4 +1,4 @@
-import { workflow, node, trigger, sticky, ifElse, expr } from '@n8n/workflow-sdk';
+import { workflow, node, trigger, sticky, ifElse, switchCase, expr } from '@n8n/workflow-sdk';
 
 const errTrig = trigger({
   type: 'n8n-nodes-base.errorTrigger', version: 1,
@@ -627,9 +627,9 @@ const dashOps = node({
     dataTableId: { __rl: true, mode: 'list', value: 'RnlzXRfhSe8rRWiq', cachedResultName: 'ops_events' }, returnAll: true } },
   output: [{ event_id: 'E1', level: 'error' }]
 });
-const dashRender = node({
+const dashData = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'G7 Render Dashboard', position: [2160, 4400], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'G9 Build Datasets', position: [2160, 4400], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `function rows(n) { return $(n).all().map(function (i) { return i.json; }).filter(function (r) { return r && Object.keys(r).length > 1; }); }
 const clicks = rows('G2 Read click_events');
 const bookings = rows('G3 Read bookings');
@@ -638,8 +638,6 @@ const notifs = rows('G5 Read notifications');
 const ops = rows('G6 Read ops_events');
 
 const humanClicks = clicks.filter(function (c) { return c.is_bot !== true; });
-const botClicks = clicks.length - humanClicks.length;
-
 const STAGES = ['clicked','chatted','form_opened','form_submitted','checkout_started','deposit_paid','confirmed'];
 const stageCount = {};
 STAGES.forEach(function (s) { stageCount[s] = 0; });
@@ -648,38 +646,80 @@ bookings.forEach(function (b) { if (stageCount[b.stage] !== undefined) { stageCo
 const byPost = {};
 humanClicks.forEach(function (c) {
   const k = c.post_id || 'unknown';
-  if (!byPost[k]) { byPost[k] = { post_id: k, clicks: 0, exact: 0 }; }
+  if (!byPost[k]) { byPost[k] = { post_id: k, clicks: 0, exact_attribution: 0 }; }
   byPost[k].clicks += 1;
-  if (c.attribution === 'exact') { byPost[k].exact += 1; }
+  if (c.attribution === 'exact') { byPost[k].exact_attribution += 1; }
 });
 const posts = Object.keys(byPost).map(function (k) { return byPost[k]; }).sort(function (a, b) { return b.clicks - a.clicks; });
 
-const emails = notifs.filter(function (n) { return n.channel === 'email'; }).length;
-const smss = notifs.filter(function (n) { return n.channel === 'sms'; }).length;
-const failedNotifs = notifs.filter(function (n) { return n.status !== 'sent'; }).length;
-const inbound = msgs.filter(function (m) { return m.direction === 'inbound'; }).length;
-const outbound = msgs.filter(function (m) { return m.direction === 'outbound'; }).length;
-const errors = ops.filter(function (o) { return o.level === 'error'; }).length;
+const STALLED = ['form_opened','form_submitted','checkout_started'];
+const leads = bookings.filter(function (b) { return STALLED.indexOf(b.stage) !== -1; }).map(function (b) {
+  return { booking_id: b.booking_id || '', contact_id: b.contact_id || '', stage: b.stage || '',
+    full_name: b.full_name || '', email: b.email || '', phone: b.phone || '',
+    preferred_channel: b.phone ? 'sms' : 'email',
+    chase_count: Number(b.chase_count) || 0, last_chased_at: b.last_chased_at || '',
+    slot_start: b.slot_start || '', deposit_amount: Number(b.deposit_amount) || 0,
+    currency: b.currency || '', post_id: b.post_id || '', attribution: b.attribution || '',
+    created_at: b.created_at || '' };
+});
 
-const stalled = bookings.filter(function (b) { return ['form_opened','form_submitted','checkout_started'].indexOf(b.stage) !== -1; });
+const events = [];
+clicks.forEach(function (c) { events.push({ fact_type: 'click', event_id: c.click_id || '', occurred_at: c.clicked_at || '', contact_id: '', booking_id: '', post_id: c.post_id || '', channel: c.platform || '', attribution: c.attribution || '', stage: '', direction: '', status: c.is_bot ? 'bot' : 'human', template: '', amount: 0, currency: '', level: '', node_name: '', detail: '' }); });
+bookings.forEach(function (b) { events.push({ fact_type: 'booking', event_id: b.booking_id || '', occurred_at: b.created_at || '', contact_id: b.contact_id || '', booking_id: b.booking_id || '', post_id: b.post_id || '', channel: '', attribution: b.attribution || '', stage: b.stage || '', direction: '', status: b.stage || '', template: '', amount: Number(b.deposit_amount) || 0, currency: b.currency || '', level: '', node_name: '', detail: b.slot_start || '' }); });
+msgs.forEach(function (m) { events.push({ fact_type: 'message', event_id: m.message_id || '', occurred_at: m.created_at || '', contact_id: m.contact_id || '', booking_id: '', post_id: '', channel: m.channel || '', attribution: '', stage: '', direction: m.direction || '', status: '', template: '', amount: 0, currency: '', level: '', node_name: '', detail: String(m.body || '').slice(0, 200) }); });
+notifs.forEach(function (n) { events.push({ fact_type: 'notification', event_id: n.notification_id || '', occurred_at: n.sent_at || '', contact_id: n.contact_id || '', booking_id: n.booking_id || '', post_id: '', channel: n.channel || '', attribution: '', stage: '', direction: 'outbound', status: n.status || '', template: n.template || '', amount: 0, currency: '', level: '', node_name: '', detail: n.recipient || '' }); });
+ops.forEach(function (o) { events.push({ fact_type: 'ops_event', event_id: o.event_id || '', occurred_at: o.created_at || '', contact_id: '', booking_id: '', post_id: '', channel: '', attribution: '', stage: '', direction: '', status: '', template: '', amount: 0, currency: '', level: o.level || '', node_name: o.node_name || '', detail: String(o.message || '').slice(0, 300) }); });
+events.sort(function (a, b) { return String(a.occurred_at) < String(b.occurred_at) ? 1 : -1; });
 
+return [{ json: {
+  generated_at: new Date().toISOString(),
+  kpis: {
+    human_clicks: humanClicks.length, bot_clicks: clicks.length - humanClicks.length,
+    messages_in: msgs.filter(function (m) { return m.direction === 'inbound'; }).length,
+    messages_out: msgs.filter(function (m) { return m.direction === 'outbound'; }).length,
+    bookings: bookings.length, confirmed: stageCount.confirmed,
+    emails_sent: notifs.filter(function (n) { return n.channel === 'email'; }).length,
+    sms_sent: notifs.filter(function (n) { return n.channel === 'sms'; }).length,
+    notifications_failed: notifs.filter(function (n) { return n.status !== 'sent'; }).length,
+    errors: ops.filter(function (o) { return o.level === 'error'; }).length,
+    leads_to_follow_up: leads.length
+  },
+  funnel: STAGES.map(function (s) { return { stage: s, count: stageCount[s] }; }),
+  posts: posts,
+  leads: leads,
+  events: events
+}}];` } },
+  output: [{ generated_at: '2026-01-01T00:00:00.000Z', kpis: { human_clicks: 2, bookings: 2 }, funnel: [], posts: [], leads: [], events: [] }]
+});
+const dashFormat = switchCase({
+  version: 3.4,
+  config: { name: 'G10 Which Format?', position: [2520, 4400], parameters: {
+    mode: 'rules',
+    rules: { values: [
+      { conditions: { options: { caseSensitive: false, leftValue: '', typeValidation: 'loose' },
+          conditions: [{ leftValue: expr("{{ ($('G1 Dashboard Request').first().json.query || {}).format || 'html' }}"), operator: { type: 'string', operation: 'equals' }, rightValue: 'json' }], combinator: 'and' },
+        renameOutput: true, outputKey: 'json' },
+      { conditions: { options: { caseSensitive: false, leftValue: '', typeValidation: 'loose' },
+          conditions: [{ leftValue: expr("{{ ($('G1 Dashboard Request').first().json.query || {}).format || 'html' }}"), operator: { type: 'string', operation: 'equals' }, rightValue: 'csv' }], combinator: 'and' },
+        renameOutput: true, outputKey: 'csv' }
+    ] },
+    looseTypeValidation: true,
+    options: { fallbackOutput: 'extra', renameFallbackOutput: 'html' } } }
+});
+const dashRender = node({
+  type: 'n8n-nodes-base.code', version: 2,
+  config: { name: 'G7 Render Dashboard', position: [2880, 4060], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+    jsCode: `const d = $('G9 Build Datasets').first().json;
+const k = d.kpis;
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function tile(label, value, sub) {
   return '<div class="t"><div class="v">' + esc(value) + '</div><div class="k">' + esc(label) + '</div>' + (sub ? '<div class="s">' + esc(sub) + '</div>' : '') + '</div>';
 }
-
-const funnelRows = STAGES.map(function (s) {
-  return '<tr><td>' + s + '</td><td class="n">' + stageCount[s] + '</td></tr>';
-}).join('');
-const postRows = posts.length ? posts.map(function (p) {
-  return '<tr><td>' + esc(p.post_id) + '</td><td class="n">' + p.clicks + '</td><td class="n">' + p.exact + '</td></tr>';
-}).join('') : '<tr><td colspan="3">No clicks yet</td></tr>';
-const stalledRows = stalled.length ? stalled.map(function (b) {
-  return '<tr><td>' + esc(b.booking_id) + '</td><td>' + esc(b.stage) + '</td><td>' + esc(b.full_name) + '</td><td>' + esc(b.phone || b.email) + '</td><td class="n">' + (b.chase_count || 0) + '</td></tr>';
-}).join('') : '<tr><td colspan="5">Nobody stalled</td></tr>';
-const errRows = ops.length ? ops.slice(-8).reverse().map(function (o) {
-  return '<tr><td>' + esc(o.created_at) + '</td><td>' + esc(o.node_name) + '</td><td>' + esc(o.message) + '</td></tr>';
-}).join('') : '<tr><td colspan="3">No failures recorded</td></tr>';
+const funnelRows = d.funnel.map(function (f) { return '<tr><td>' + esc(f.stage) + '</td><td class="n">' + f.count + '</td></tr>'; }).join('');
+const postRows = d.posts.length ? d.posts.map(function (p) { return '<tr><td>' + esc(p.post_id) + '</td><td class="n">' + p.clicks + '</td><td class="n">' + p.exact_attribution + '</td></tr>'; }).join('') : '<tr><td colspan="3">No clicks yet</td></tr>';
+const leadRows = d.leads.length ? d.leads.map(function (b) { return '<tr><td>' + esc(b.booking_id) + '</td><td>' + esc(b.stage) + '</td><td>' + esc(b.full_name) + '</td><td>' + esc(b.phone || b.email) + '</td><td>' + esc(b.preferred_channel) + '</td><td class="n">' + b.chase_count + '</td></tr>'; }).join('') : '<tr><td colspan="6">Nobody stalled</td></tr>';
+const fails = d.events.filter(function (e) { return e.fact_type === 'ops_event'; }).slice(0, 8);
+const errRows = fails.length ? fails.map(function (o) { return '<tr><td>' + esc(o.occurred_at) + '</td><td>' + esc(o.node_name) + '</td><td>' + esc(o.detail) + '</td></tr>'; }).join('') : '<tr><td colspan="3">No failures recorded</td></tr>';
 
 const css = 'body{margin:0;background:#0e1117;color:#e6e8ef;font:15px/1.55 ui-sans-serif,system-ui,sans-serif}'
   + '.w{max-width:1080px;margin:0 auto;padding:36px 24px 80px}'
@@ -691,23 +731,31 @@ const css = 'body{margin:0;background:#0e1117;color:#e6e8ef;font:15px/1.55 ui-sa
   + 'table{width:100%;border-collapse:collapse;background:#161a24;border:1px solid #252a38;border-radius:5px;overflow:hidden;font-size:14px}'
   + 'th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#8b93a8;padding:10px 14px;border-bottom:1px solid #252a38}'
   + 'td{padding:10px 14px;border-bottom:1px solid #1d2230}tr:last-child td{border-bottom:0}'
-  + 'td.n{text-align:right;font-variant-numeric:tabular-nums}';
+  + 'td.n{text-align:right;font-variant-numeric:tabular-nums}'
+  + '.x{background:#161a24;border:1px solid #252a38;border-radius:5px;padding:14px 18px;font-size:14px;line-height:2.1}'
+  + '.x a{color:#8e9bf0;text-decoration:none;border-bottom:1px solid #3a4260}.x span{color:#6c7488;font-size:13px}';
 
 const html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
   + '<title>Funnel Dashboard</title><style>' + css + '</style></head><body><div class="w">'
-  + '<h1>Booking Funnel</h1><p class="sub">Simulated data · generated ' + new Date().toISOString() + '</p>'
+  + '<h1>Booking Funnel</h1><p class="sub">Simulated data · generated ' + d.generated_at + '</p>'
   + '<h2>Headline</h2><div class="g">'
-  + tile('Human clicks', humanClicks.length, botClicks + ' bot hits excluded')
-  + tile('Conversations', inbound + outbound, inbound + ' in / ' + outbound + ' out')
-  + tile('Bookings', bookings.length, stageCount.confirmed + ' confirmed')
-  + tile('Emails sent', emails, '')
-  + tile('SMS sent', smss, failedNotifs + ' failed')
-  + tile('Errors', errors, '')
+  + tile('Human clicks', k.human_clicks, k.bot_clicks + ' bot hits excluded')
+  + tile('Conversations', k.messages_in + k.messages_out, k.messages_in + ' in / ' + k.messages_out + ' out')
+  + tile('Bookings', k.bookings, k.confirmed + ' confirmed')
+  + tile('Emails sent', k.emails_sent, '')
+  + tile('SMS sent', k.sms_sent, k.notifications_failed + ' failed')
+  + tile('Errors', k.errors, '')
   + '</div>'
   + '<h2>Funnel</h2><table><tr><th>Stage</th><th style="text-align:right">Count</th></tr>' + funnelRows + '</table>'
   + '<h2>Post popularity</h2><table><tr><th>Post</th><th style="text-align:right">Clicks</th><th style="text-align:right">Exact attribution</th></tr>' + postRows + '</table>'
-  + '<h2>Follow-up list</h2><table><tr><th>Booking</th><th>Stage</th><th>Name</th><th>Contact</th><th style="text-align:right">Chased</th></tr>' + stalledRows + '</table>'
+  + '<h2>Follow-up list · ' + k.leads_to_follow_up + '</h2><table><tr><th>Booking</th><th>Stage</th><th>Name</th><th>Contact</th><th>Chase via</th><th style="text-align:right">Chased</th></tr>' + leadRows + '</table>'
   + '<h2>Recent failures</h2><table><tr><th>When</th><th>Node</th><th>Message</th></tr>' + errRows + '</table>'
+  + '<h2>Export</h2><div class="x">'
+  + '<a href="?format=json">JSON — all datasets</a> <span>Power BI Web connector · Looker Studio</span><br>'
+  + '<a href="?format=csv&amp;dataset=leads">CSV — leads to follow up</a> <span>Salesforce · GoHighLevel</span><br>'
+  + '<a href="?format=csv&amp;dataset=events">CSV — event facts</a> <span>one row per click, booking, message, notification, failure</span><br>'
+  + '<a href="?format=csv&amp;dataset=funnel">CSV — funnel counts</a> &nbsp; <a href="?format=csv&amp;dataset=posts">CSV — post popularity</a>'
+  + '</div>'
   + '</div></body></html>';
 
 return [{ json: { html: html } }];` } },
@@ -715,9 +763,48 @@ return [{ json: { html: html } }];` } },
 });
 const dashServe = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
-  config: { name: 'G8 Serve Page', position: [2520, 4400], parameters: { respondWith: 'text',
+  config: { name: 'G8 Serve Page', position: [3240, 4060], parameters: { respondWith: 'text',
     responseBody: expr('{{ $json.html }}'),
     options: { responseCode: 200, responseHeaders: { entries: [{ name: 'content-type', value: 'text/html; charset=utf-8' }] } } } },
+  output: [{}]
+});
+const dashJson = node({
+  type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
+  config: { name: 'G11 Serve JSON', position: [2880, 4400], parameters: { respondWith: 'json',
+    responseBody: expr('{{ $json }}'), options: { responseCode: 200 } } },
+  output: [{}]
+});
+const dashCsvBuild = node({
+  type: 'n8n-nodes-base.code', version: 2,
+  config: { name: 'G12 Build CSV', position: [2880, 4740], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+    jsCode: `const d = $('G9 Build Datasets').first().json;
+const q = ($('G1 Dashboard Request').first().json || {}).query || {};
+const asked = String(q.dataset || 'leads').toLowerCase();
+const SETS = { leads: d.leads, events: d.events, funnel: d.funnel, posts: d.posts };
+const chosen = SETS[asked] ? asked : 'leads';
+const rows = SETS[chosen];
+function cell(v) {
+  const s = v === null || v === undefined ? '' : String(v);
+  return /[",\\n\\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+let csv = '';
+if (!rows.length) { csv = 'no_rows\\n'; }
+else {
+  const cols = Object.keys(rows[0]);
+  csv = cols.join(',') + '\\n';
+  rows.forEach(function (r) { csv += cols.map(function (c) { return cell(r[c]); }).join(',') + '\\n'; });
+}
+return [{ json: { csv: csv, dataset: chosen, row_count: rows.length, filename: 'funnel-' + chosen + '.csv' } }];` } },
+  output: [{ csv: 'booking_id,stage\n', dataset: 'leads', row_count: 1, filename: 'funnel-leads.csv' }]
+});
+const dashCsvServe = node({
+  type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
+  config: { name: 'G13 Serve CSV', position: [3240, 4740], parameters: { respondWith: 'text',
+    responseBody: expr('{{ $json.csv }}'),
+    options: { responseCode: 200, responseHeaders: { entries: [
+      { name: 'content-type', value: 'text/csv; charset=utf-8' },
+      { name: 'content-disposition', value: expr('attachment; filename="{{ $json.filename }}"') }
+    ] } } } },
   output: [{}]
 });
 
@@ -730,7 +817,7 @@ const banC = sticky("## C · Chat and agent\nTrades the token for the click row 
 const banD = sticky("## D · Booking and deposit\nChecks the slot **before** taking money, holds it with an expiry, then shows a simulated payment link. A taken slot ends the form politely rather than charging for something unavailable.", [], { name: 'Band D', position: [2560, 2140], width: 760, height: 120, color: 4 });
 const banE = sticky("## E · Payment and confirmation\n**Re-checks the slot after payment** — the race that would otherwise double-book. If it was lost, the deposit is refunded rather than the customer being quietly overbooked. On success: calendar event, receipt, SMS.", [], { name: 'Band E', position: [4000, 2840], width: 780, height: 120, color: 6 });
 const banF = sticky("## F · Follow-up nurture\nHourly sweep for bookings stuck at `form_opened`, `form_submitted` or `checkout_started` for over 24 hours. Chases once, then stamps `chase_count` so nobody is pestered twice.", [], { name: 'Band F', position: [2560, 3640], width: 760, height: 120, color: 2 });
-const banG = sticky("## G · Dashboard\nReads all five tables and renders one HTML page: funnel counts, post popularity, the follow-up list, message and notification volume, and recent failures.", [], { name: 'Band G', position: [2920, 4340], width: 700, height: 120, color: 6 });
+const banG = sticky("## G · Dashboard and exports\nReads all five tables once in **G9**, then serves the same numbers three ways off one endpoint: the HTML page by default, `?format=json` for Power BI and Looker Studio, and `?format=csv&dataset=…` for Salesforce and GoHighLevel. Aggregation lives in one node so the three formats cannot drift apart.", [], { name: 'Band G', position: [3600, 4380], width: 700, height: 140, color: 6 });
 
 const cA1 = sticky("### A1 · Workflow Failed\n`Error Trigger`\n\n**In:** the failing execution, from n8n itself.\n**Out:** the raw error payload.", [], { name: 'c A1', position: [0, 140], width: 300, height: 190, color: 3 });
 const cA2 = sticky("### A2 · Build Ops Event\n`Code`\n\n**Does:** flattens the nested error and clips every field so a stack trace cannot break the insert.\n**Out:** 1 `ops_events` row.", [], { name: 'c A2', position: [360, 140], width: 300, height: 200, color: 5 });
@@ -789,8 +876,13 @@ const cG3 = sticky("### G3 · bookings", [], { name: 'c G3', position: [720, 454
 const cG4 = sticky("### G4 · messages", [], { name: 'c G4', position: [1080, 4540], width: 300, height: 150, color: 6 });
 const cG5 = sticky("### G5 · notifications", [], { name: 'c G5', position: [1440, 4540], width: 300, height: 150, color: 6 });
 const cG6 = sticky("### G6 · ops_events", [], { name: 'c G6', position: [1800, 4540], width: 300, height: 150, color: 6 });
-const cG7 = sticky("### G7 · Render Dashboard\n`Code`\n\nFunnel, post popularity, follow-up list, message volume, failures. Bot clicks excluded from every count.", [], { name: 'c G7', position: [2160, 4540], width: 300, height: 230, color: 5 });
-const cG8 = sticky("### G8 · Serve Page\n`Respond` 200 HTML", [], { name: 'c G8', position: [2520, 4540], width: 300, height: 170, color: 6 });
+const cG7 = sticky("### G7 · Render Dashboard\n`Code`\n\nFunnel, post popularity, follow-up list, message volume, failures. Bot clicks excluded from every count.", [], { name: 'c G7', position: [2880, 3820], width: 300, height: 230, color: 5 });
+const cG8 = sticky("### G8 · Serve Page\n`Respond` 200 HTML", [], { name: 'c G8', position: [3240, 3820], width: 300, height: 170, color: 6 });
+const cG9 = sticky("### G9 · Build Datasets\n`Code`\n\n**Does:** every aggregate, computed once — KPIs, funnel, post popularity, the follow-up list, and a flat event fact table.\n**Out:** 1 item holding all five datasets.\n\nThe single source of truth for all three formats.", [], { name: 'c G9', position: [2160, 4540], width: 300, height: 250, color: 5 });
+const cG10 = sticky("### G10 · Which Format?\n`Switch` · reads `?format=`\n\n**json** → G11\n**csv** → G12\n**anything else** → the HTML page\n\nUnknown values fall back to the page rather than erroring.", [], { name: 'c G10', position: [2520, 4540], width: 300, height: 230, color: 5 });
+const cG11 = sticky("### G11 · Serve JSON\n`Respond` 200 JSON\n\nAll five datasets in one object. Power BI's **Web** connector expands each list into its own table from this single URL.", [], { name: 'c G11', position: [2880, 4540], width: 300, height: 190, color: 6 });
+const cG12 = sticky("### G12 · Build CSV\n`Code` · reads `?dataset=`\n\n`leads` (default) · `events` · `funnel` · `posts`\n\n**Does:** RFC-4180 quoting — commas, quotes and newlines inside a field cannot break the file.", [], { name: 'c G12', position: [2880, 4900], width: 300, height: 230, color: 5 });
+const cG13 = sticky("### G13 · Serve CSV\n`Respond` 200 text/csv\n\nSends `content-disposition: attachment`, so a browser downloads it and a CRM importer accepts it.", [], { name: 'c G13', position: [3240, 4900], width: 300, height: 190, color: 6 });
 
 export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in One (Simulated)')
   .add(errTrig).to(errBuild).to(errWrite)
@@ -803,7 +895,11 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(payIn).to(payLoad).to(payCheck)
     .to(payOk.onTrue(payRecord.to(paySave.to(payBooking.to(payUpdate.to(payNotify.to(payNotifSave.to(payDone))))))).onFalse(payFail))
   .add(nurTrig).to(nurLoad).to(nurFind).to(nurBuild).to(nurLog).to(nurMark).to(nurSave)
-  .add(dashIn).to(dashClicks).to(dashBookings).to(dashMsgs).to(dashNotifs).to(dashOps).to(dashRender).to(dashServe)
+  .add(dashIn).to(dashClicks).to(dashBookings).to(dashMsgs).to(dashNotifs).to(dashOps).to(dashData)
+    .to(dashFormat
+      .onCase(0, dashJson)
+      .onCase(1, dashCsvBuild.to(dashCsvServe))
+      .onCase(2, dashRender.to(dashServe)))
   .add(readme).add(banA).add(banB).add(banC).add(banD).add(banE).add(banF).add(banG)
   .add(cA1).add(cA2).add(cA3)
   .add(cB1).add(cB2).add(cB3).add(cB4).add(cB5).add(cB6).add(cB7).add(cB8)
@@ -811,4 +907,5 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(cD1).add(cD2).add(cD3).add(cD4).add(cD5).add(cD6).add(cD7).add(cD8)
   .add(cE1).add(cE2).add(cE3).add(cE4).add(cE5).add(cE6).add(cE7).add(cE8).add(cE9).add(cE10).add(cE11).add(cE12)
   .add(cF1).add(cF2).add(cF3).add(cF4).add(cF5).add(cF6).add(cF7)
-  .add(cG1).add(cG2).add(cG3).add(cG4).add(cG5).add(cG6).add(cG7).add(cG8);
+  .add(cG1).add(cG2).add(cG3).add(cG4).add(cG5).add(cG6).add(cG7).add(cG8)
+  .add(cG9).add(cG10).add(cG11).add(cG12).add(cG13);
