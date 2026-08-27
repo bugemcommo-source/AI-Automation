@@ -21,7 +21,8 @@ they never interfere with one another.
 | **D** Booking form | the form trigger's public URL | Checks the slot, holds it, shows a simulated deposit link |
 | **E** Payment callback | `GET /webhook/pay?booking_id=…&outcome=success` | Re-checks the slot, records payment, sends receipt + SMS |
 | **F** Nurture sweep | hourly schedule | Chases bookings stalled over 24h, exactly once each |
-| **G** Dashboard | `GET /webhook/dashboard` | Renders one HTML page from all five tables, or exports JSON/CSV |
+| **G** Dashboard | `GET /webhook/dashboard` | Renders one HTML page from all seven tables, or exports JSON/CSV |
+| **H** Publish | the publish form's public URL | Mints one tracked link per platform and fans the post out |
 
 ## How the seven branches connect
 
@@ -95,6 +96,28 @@ add the credential. No rewiring.
 | Twilio | `F4a Chase SMS` | F4's pretend chase |
 | Gmail | `F4b Chase Email` | F4's pretend chase |
 | Salesforce | `G12a Create Lead` | the CSV export |
+
+### Social platforms — branch H (9)
+Facebook, Instagram, X, LinkedIn, WhatsApp, Discord, Reddit, Telegram, TikTok.
+Each receives the same caption with **its own tracked link** appended, so a
+click traces back to the platform it came from. Instagram and TikTok ship no
+dedicated n8n node — Instagram goes through the Facebook Graph API, TikTok
+through the Content Posting API, which is how you integrate them for real.
+
+### CRM and spreadsheet destinations — off `G12` (5)
+Salesforce, GoHighLevel, HubSpot, Pipedrive, Google Sheets. All receive the
+same `leads` rows the CSV export contains. GoHighLevel ships no n8n node, so
+it is an HTTP Request against the LeadConnector API.
+
+### Database destinations — off `G12` (5)
+Postgres, MySQL, MongoDB, Airtable, Supabase — what the eleven data tables
+become at scale.
+
+### A note on colour
+n8n renders **disabled nodes desaturated**, and node icons come from the node
+type — neither is overridable. So identification is carried by sticky colour
+instead, which is under our control: 🟢 green for social publishing, 🟠 orange
+for CRM, 🔵 blue for databases, purple for messaging, calendar and payments.
 
 Each hangs off the same parent as the simulated node it mirrors, rather than
 sitting in series with it. That way the pairing is visible and they can be
@@ -185,9 +208,12 @@ Every branch was run against the live instance, both sides of every `If`:
   an unknown format falls back to the page.
 - **A** — a simulated failure lands in `ops_events` with node, message and
   execution URL intact.
-- **Every branch again, with the app nodes in place** — all ten report
+- **Every branch again, with the app nodes in place** — all thirty report
   `executionTime: 0` and pass their input through untouched, and every branch
   still produces exactly the same rows it did before they were added.
+- **The loop closes** — branch H published `post_005` with nine tracked links,
+  and branch B logged a click on that exact post with an exact-attribution
+  token. Publish and click are now two ends of one measurable path.
 
 ## Redundancy removed
 

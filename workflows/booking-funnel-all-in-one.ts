@@ -1006,6 +1006,179 @@ const sfLead = node({
   output: [{}]
 });
 
+const ghlUpsert = node({
+  type: 'n8n-nodes-base.httpRequest', version: 4.2,
+  config: { name: 'G12b GoHighLevel — Upsert Contact', position: [4680, 4740], disabled: true, parameters: {
+    method: 'POST', url: 'https://services.leadconnectorhq.com/contacts/upsert',
+    sendHeaders: true, headerParameters: { parameters: [{ name: 'Version', value: '2021-07-28' }] },
+    sendBody: true, specifyBody: 'json',
+    jsonBody: expr("{{ JSON.stringify({ locationId: 'YOUR_LOCATION_ID', source: 'n8n Booking Funnel', tags: [$json.dataset] }) }}"),
+    options: {} } },
+  output: [{}]
+});
+const hubspotUpsert = node({
+  type: 'n8n-nodes-base.hubspot', version: 2.2,
+  config: { name: 'G12c HubSpot — Upsert Contact', position: [5040, 4740], disabled: true, parameters: {
+    resource: 'contact', operation: 'upsert', email: expr('{{ $json.dataset }}'), additionalFields: {} } },
+  output: [{}]
+});
+const pipedriveLead = node({
+  type: 'n8n-nodes-base.pipedrive', version: 2,
+  config: { name: 'G12d Pipedrive — Create Lead', position: [5400, 4740], disabled: true, parameters: {
+    resource: 'lead', operation: 'create', title: expr("{{ 'Funnel export — ' + $json.dataset }}"), additionalFields: {} } },
+  output: [{}]
+});
+const sheetsAppend = node({
+  type: 'n8n-nodes-base.googleSheets', version: 4.7,
+  config: { name: 'G12e Google Sheets — Append', position: [5760, 4740], disabled: true, parameters: {
+    resource: 'sheet', operation: 'append',
+    documentId: { __rl: true, mode: 'url', value: 'https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID' },
+    sheetName: { __rl: true, mode: 'name', value: 'leads' },
+    columns: { mappingMode: 'autoMapInputData', value: null, matchingColumns: [] } } },
+  output: [{}]
+});
+const pgInsert = node({
+  type: 'n8n-nodes-base.postgres', version: 2.7,
+  config: { name: 'G12f Postgres — Insert', position: [4320, 5100], disabled: true, parameters: {
+    operation: 'executeQuery',
+    query: 'INSERT INTO funnel_events (dataset, row_count, exported_at) VALUES ($1, $2, NOW());',
+    options: { queryReplacement: expr('{{ $json.dataset }}, {{ $json.row_count }}') } } },
+  output: [{}]
+});
+const mysqlInsert = node({
+  type: 'n8n-nodes-base.mySql', version: 2.5,
+  config: { name: 'G12g MySQL — Insert', position: [4680, 5100], disabled: true, parameters: {
+    operation: 'executeQuery',
+    query: 'INSERT INTO funnel_events (dataset, row_count, exported_at) VALUES (?, ?, NOW());',
+    options: { queryReplacement: expr('{{ $json.dataset }}, {{ $json.row_count }}') } } },
+  output: [{}]
+});
+const mongoInsert = node({
+  type: 'n8n-nodes-base.mongoDb', version: 1.4,
+  config: { name: 'G12h MongoDB — Insert', position: [5040, 5100], disabled: true, parameters: {
+    resource: 'document', operation: 'insert', collection: 'funnel_events',
+    fields: 'dataset,row_count,filename', options: {} } },
+  output: [{}]
+});
+const airtableCreate = node({
+  type: 'n8n-nodes-base.airtable', version: 2.2,
+  config: { name: 'G12i Airtable — Create Record', position: [5400, 5100], disabled: true, parameters: {
+    resource: 'record', operation: 'create',
+    base: { __rl: true, mode: 'id', value: 'appYOURBASEID' },
+    table: expr("{{ 'Funnel Events' }}"),
+    columns: { mappingMode: 'autoMapInputData', value: null, matchingColumns: [] }, options: {} } },
+  output: [{}]
+});
+const supabaseCreate = node({
+  type: 'n8n-nodes-base.supabase', version: 1,
+  config: { name: 'G12j Supabase — Create Row', position: [5760, 5100], disabled: true, parameters: {
+    resource: 'row', operation: 'create', tableId: expr("{{ 'funnel_events' }}"), dataToSend: 'autoMapInputData' } },
+  output: [{}]
+});
+
+const postForm = trigger({
+  type: 'n8n-nodes-base.formTrigger', version: 2.6,
+  config: { name: 'H1 New Post', position: [0, 5800], parameters: {
+    formTitle: 'Publish a post', formDescription: 'Writes one tracked link per platform, then fans the post out.',
+    responseMode: 'lastNode',
+    formFields: { values: [
+      { fieldLabel: 'Post ID', fieldType: 'text', requiredField: true },
+      { fieldLabel: 'Caption', fieldType: 'textarea', requiredField: true }
+    ] },
+    options: { appendAttribution: false, buttonLabel: 'Publish' } } },
+  output: [{ 'Post ID': 'post_005', Caption: 'Two studio slots left this week.' }]
+});
+const postLinks = node({
+  type: 'n8n-nodes-base.code', version: 2,
+  config: { name: 'H2 Build Tracked Links', position: [360, 5800], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+    jsCode: `const f = $('H1 New Post').first().json || {};
+const postId = String(f['Post ID'] || 'post_001').trim();
+const caption = String(f.Caption || '').trim();
+const BASE = 'https://gipre.app.n8n.cloud/webhook/go';
+const PLATFORMS = ['facebook','instagram','x','linkedin','whatsapp','discord','reddit','telegram','tiktok'];
+const links = {};
+PLATFORMS.forEach(function (p) { links[p] = BASE + '?p=' + encodeURIComponent(postId) + '&c=' + p; });
+const out = [];
+PLATFORMS.forEach(function (p) {
+  out.push({ json: {
+    post_id: postId, platform: p, tracked_link: links[p],
+    body: caption + '\\n\\n' + links[p],
+    caption: caption, created_at: new Date().toISOString()
+  }});
+});
+return out;` } },
+  output: [{ post_id: 'post_005', platform: 'facebook', tracked_link: 'https://gipre.app.n8n.cloud/webhook/go?p=post_005&c=facebook', body: 'caption + link', caption: 'caption', created_at: '2026-01-01T00:00:00.000Z' }]
+});
+const fbPublish = node({
+  type: 'n8n-nodes-base.facebookGraphApi', version: 1,
+  config: { name: 'H3 Facebook — Publish', position: [1080, 5800], disabled: true, parameters: {
+    hostUrl: 'graph.facebook.com', httpRequestMethod: 'POST', graphApiVersion: 'v21.0',
+    node: 'YOUR_PAGE_ID', edge: 'feed',
+    options: { queryParametersUi: { parameter: [{ name: 'message', value: expr('{{ $json.body }}') }] } } } },
+  output: [{}]
+});
+const igPublish = node({
+  type: 'n8n-nodes-base.facebookGraphApi', version: 1,
+  config: { name: 'H4 Instagram — Publish (Graph API)', position: [1440, 5800], disabled: true, parameters: {
+    hostUrl: 'graph.facebook.com', httpRequestMethod: 'POST', graphApiVersion: 'v21.0',
+    node: 'YOUR_IG_BUSINESS_ID', edge: 'media',
+    options: { queryParametersUi: { parameter: [{ name: 'caption', value: expr('{{ $json.body }}') }] } } } },
+  output: [{}]
+});
+const xTweet = node({
+  type: 'n8n-nodes-base.twitter', version: 2,
+  config: { name: 'H5 X — Create Tweet', position: [1800, 5800], disabled: true, parameters: {
+    resource: 'tweet', operation: 'create', text: expr('{{ $json.body }}'), additionalFields: {} } },
+  output: [{}]
+});
+const liPost = node({
+  type: 'n8n-nodes-base.linkedIn', version: 1,
+  config: { name: 'H6 LinkedIn — Create Post', position: [2160, 5800], disabled: true, parameters: {
+    resource: 'post', operation: 'create', postAs: 'person', person: 'YOUR_PERSON_URN',
+    text: expr('{{ $json.body }}'), additionalFields: {} } },
+  output: [{}]
+});
+const waSend = node({
+  type: 'n8n-nodes-base.whatsApp', version: 1.1,
+  config: { name: 'H7 WhatsApp — Send', position: [2520, 5800], disabled: true, parameters: {
+    resource: 'message', operation: 'send', phoneNumberId: 'YOUR_PHONE_NUMBER_ID',
+    recipientPhoneNumber: '+15550000000', textBody: expr('{{ $json.body }}') } },
+  output: [{}]
+});
+const dcSend = node({
+  type: 'n8n-nodes-base.discord', version: 2,
+  config: { name: 'H8 Discord — Send', position: [2880, 5800], disabled: true, parameters: {
+    authentication: 'botToken', resource: 'message', operation: 'send',
+    guildId: { __rl: true, mode: 'id', value: 'YOUR_GUILD_ID' }, sendTo: 'channel',
+    channelId: { __rl: true, mode: 'id', value: 'YOUR_CHANNEL_ID' },
+    content: expr('{{ $json.body }}'), options: {} } },
+  output: [{}]
+});
+const rdPost = node({
+  type: 'n8n-nodes-base.reddit', version: 1,
+  config: { name: 'H9 Reddit — Submit Post', position: [3240, 5800], disabled: true, parameters: {
+    resource: 'post', operation: 'create', subreddit: 'yoursubreddit', kind: 'self',
+    title: expr('{{ $json.caption }}'), text: expr('{{ $json.body }}') } },
+  output: [{}]
+});
+const tgChannel = node({
+  type: 'n8n-nodes-base.telegram', version: 1.2,
+  config: { name: 'H10 Telegram — Post to Channel', position: [3600, 5800], disabled: true, parameters: {
+    resource: 'message', operation: 'sendMessage', chatId: '@your_channel',
+    text: expr('{{ $json.body }}'), replyMarkup: 'none',
+    additionalFields: { appendAttribution: false } } },
+  output: [{}]
+});
+const ttPublish = node({
+  type: 'n8n-nodes-base.httpRequest', version: 4.2,
+  config: { name: 'H11 TikTok — Publish (Content API)', position: [3960, 5800], disabled: true, parameters: {
+    method: 'POST', url: 'https://open.tiktokapis.com/v2/post/publish/content/init/',
+    sendBody: true, specifyBody: 'json',
+    jsonBody: expr("{{ JSON.stringify({ post_info: { title: $json.caption, privacy_level: 'PUBLIC_TO_EVERYONE' }, source_info: { source: 'PULL_FROM_URL', video_url: 'https://example.com/your-video.mp4' } }) }}"),
+    options: {} } },
+  output: [{}]
+});
+
 const readme = sticky("# Booking Funnel — All in One\n## Every branch of the funnel on a single canvas. Fully simulated, zero credentials.\n\nSeven independent entry points share one workflow and one set of eleven data tables. Each trigger runs its own isolated execution, so the branches never interfere with each other.\n\n| Branch | Entry point |\n| --- | --- |\n| **A** Error handler | fires on this workflow's own failures |\n| **B** Click router | `GET /webhook/go?p=post_001&c=telegram` |\n| **C** Chat + agent | `POST /webhook/chat` |\n| **D** Booking form | the form trigger's public URL |\n| **E** Payment callback | `GET /webhook/pay?booking_id=…&outcome=success` |\n| **F** Nurture sweep | hourly schedule |\n| **G** Dashboard | `GET /webhook/dashboard` |\n\n### What is simulated\nThe calendar (a real `slots` table both D and E read — booked, or held until an expiry — rather than a formula), the payment (a link with `outcome=success` or `fail`), the receipt email and SMS (rows written as if delivered), and the LLM (keyword scoring over the `faq` table).\n\n### The tradeoff you accepted\nOne workflow means activation is all-or-nothing — you cannot pause the hourly sweep without also taking down the webhooks. Fine for a simulation; revisit before real money moves through it.", [], {
   name: 'README', position: [0, -620], width: 1500, height: 520, color: 7
 });
@@ -1097,7 +1270,10 @@ const cGmailReceipt = sticky("### E9a · Gmail\n`Send` · **disabled**\n\nThe re
 const cTwilioSms = sticky("### E9b · Twilio\n`Send SMS` · **disabled**\n\nThe congratulatory text. `from` is a placeholder number — the only field you must change.", [], { name: 'c E9b', position: [3960, 3260], width: 300, height: 190, color: 4 });
 const cTwilioChase = sticky("### F4a · Twilio\n`Send SMS` · **disabled**\n\nThe follow-up text. **F4** already chose sms vs email per lead.", [], { name: 'c F4a', position: [1080, 3200], width: 300, height: 170, color: 4 });
 const cGmailChase = sticky("### F4b · Gmail\n`Send` · **disabled**\n\nThe email half of the same follow-up, for leads with no phone number.", [], { name: 'c F4b', position: [1440, 3200], width: 300, height: 170, color: 4 });
-const cSfLead = sticky("### G12a · Salesforce\n`Create Lead` · **disabled**\n\nPushes leads straight into the CRM instead of exporting CSV for a manual import. Same data, one less step.\n\nGoHighLevel drops in the same way.", [], { name: 'c G12a', position: [4320, 4900], width: 300, height: 230, color: 4 });
+const cSfLead = sticky("## \ud83d\udfe0 CRM + spreadsheet destinations \u00b7 5\n**Salesforce \u00b7 GoHighLevel \u00b7 HubSpot \u00b7 Pipedrive \u00b7 Google Sheets**\n\nEvery one hangs off **G12 Build CSV**, so they all receive the same `leads` rows the CSV export contains \u2014 push straight into the CRM instead of exporting a file and importing it by hand.\n\nGoHighLevel ships no n8n node, so it is an HTTP Request against the LeadConnector API \u2014 how you would wire it in production.", [], { name: 'c G12a', position: [4320, 4900], width: 1740, height: 240, color: 2 });
+const banH = sticky("## H \u00b7 Publish \u2014 where the funnel actually starts\nThe piece that was missing. **H2** mints one tracked link per platform pointing at branch B's webhook, so every post carries its own `?p=<post>&c=<platform>`. That is what makes post popularity measurable at all.\n\nH2 runs for real \u2014 open it and you will see the nine links. The platforms are disabled.", [], { name: 'Band H', position: [4320, 5740], width: 760, height: 200, color: 3 });
+const catSocial = sticky("## \ud83d\udfe2 Social platforms \u00b7 9\n**Facebook \u00b7 Instagram \u00b7 X \u00b7 LinkedIn \u00b7 WhatsApp \u00b7 Discord \u00b7 Reddit \u00b7 Telegram \u00b7 TikTok**\n\nEach receives the same caption with **its own tracked link** appended, so a click can always be traced back to the platform it came from.\n\nInstagram and TikTok ship no dedicated n8n node \u2014 Instagram goes through the Facebook Graph API and TikTok through the Content Posting API, which is exactly how you integrate them for real.", [], { name: 'Cat Social', position: [1080, 5960], width: 3180, height: 240, color: 3 });
+const catDatabase = sticky("## \ud83d\udd35 Database destinations \u00b7 5\n**Postgres \u00b7 MySQL \u00b7 MongoDB \u00b7 Airtable \u00b7 Supabase**\n\nThese are what the eleven n8n data tables become at scale. The tables are perfect for a simulation and fine for low volume; past that you want a real database, and this is where it plugs in \u2014 same rows, same shape.\n\n**Power BI and Looker Studio need no node at all** \u2014 they read `?format=json` from the dashboard endpoint directly.", [], { name: 'Cat Database', position: [4320, 5320], width: 1740, height: 240, color: 5 });
 
 export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in One (Simulated)')
   .add(errTrig).to(errBuild).to(slackAlert).to(errWrite)
@@ -1119,6 +1295,25 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(nurBuild).to(twilioChase)
   .add(nurBuild).to(gmailChase)
   .add(dashCsvBuild).to(sfLead)
+  .add(dashCsvBuild).to(ghlUpsert)
+  .add(dashCsvBuild).to(hubspotUpsert)
+  .add(dashCsvBuild).to(pipedriveLead)
+  .add(dashCsvBuild).to(sheetsAppend)
+  .add(dashCsvBuild).to(pgInsert)
+  .add(dashCsvBuild).to(mysqlInsert)
+  .add(dashCsvBuild).to(mongoInsert)
+  .add(dashCsvBuild).to(airtableCreate)
+  .add(dashCsvBuild).to(supabaseCreate)
+  .add(postForm).to(postLinks)
+  .add(postLinks).to(fbPublish)
+  .add(postLinks).to(igPublish)
+  .add(postLinks).to(xTweet)
+  .add(postLinks).to(liPost)
+  .add(postLinks).to(waSend)
+  .add(postLinks).to(dcSend)
+  .add(postLinks).to(rdPost)
+  .add(postLinks).to(tgChannel)
+  .add(postLinks).to(ttPublish)
   .add(dashIn).to(dashClicks).to(dashBookings).to(dashMsgs).to(dashNotifs).to(dashOps).to(dashPayments).to(dashContacts).to(dashData)
     .to(dashFormat
       .onCase(0, dashJson)
@@ -1134,4 +1329,5 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(cG1).add(cG2).add(cG3).add(cG4).add(cG5).add(cG6).add(cG7).add(cG8)
   .add(cG9).add(cG10).add(cG11).add(cG12).add(cG13).add(cG14).add(cG15)
   .add(cSlack).add(cTgReply).add(cGcalAvail).add(cStripe).add(cGcalCreate)
-  .add(cGmailReceipt).add(cTwilioSms).add(cTwilioChase).add(cGmailChase).add(cSfLead);
+  .add(cGmailReceipt).add(cTwilioSms).add(cTwilioChase).add(cGmailChase).add(cSfLead)
+  .add(banH).add(catSocial).add(catDatabase);
