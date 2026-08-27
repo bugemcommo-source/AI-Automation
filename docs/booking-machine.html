@@ -1,0 +1,609 @@
+<title>The Booking Machine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+
+<style>
+:root{
+  --paper:#F1F3F1; --surface:#FBFCFB; --surface-2:#E7EBE8;
+  --ink:#10171A; --ink-2:#4A5A5E; --ink-3:#77878A;
+  --accent:#0D6E68; --accent-soft:#DCEBE8;
+  --money:#9A5B14; --money-soft:#F3E7D6;
+  --rule:#D5DBD8; --rule-strong:#B9C4BF;
+  --good:#2F6F4E; --warn:#9A5B14; --bad:#98342B;
+  --violet:#5B4B8A;
+  --display:"Bricolage Grotesque",system-ui,sans-serif;
+  --body:"Source Serif 4",Georgia,serif;
+  --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0C1113; --surface:#131A1C; --surface-2:#1B2426;
+    --ink:#E8EDEA; --ink-2:#9EAEB0; --ink-3:#718285;
+    --accent:#57C3B6; --accent-soft:#122E2C;
+    --money:#DDA25A; --money-soft:#2E2317;
+    --rule:#24302F; --rule-strong:#33403E;
+    --good:#6FBE92; --warn:#DDA25A; --bad:#E08076;
+    --violet:#9C8BD0;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0C1113; --surface:#131A1C; --surface-2:#1B2426;
+  --ink:#E8EDEA; --ink-2:#9EAEB0; --ink-3:#718285;
+  --accent:#57C3B6; --accent-soft:#122E2C;
+  --money:#DDA25A; --money-soft:#2E2317;
+  --rule:#24302F; --rule-strong:#33403E;
+  --good:#6FBE92; --warn:#DDA25A; --bad:#E08076;
+  --violet:#9C8BD0;
+}
+
+/* diagram colours ride the same tokens as the page, so both themes hold */
+svg .acc{stroke:var(--accent);color:var(--accent)}
+svg .acc-f{fill:var(--accent)}
+svg .acc-wash{fill:var(--accent);fill-opacity:.09;stroke:var(--accent)}
+svg .wrn{stroke:var(--money);color:var(--money)}
+svg .wrn-f{fill:var(--money)}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--body); font-size:18px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px}
+.col{max-width:680px}
+h1,h2,h3,h4{font-family:var(--display);text-wrap:balance;margin:0;line-height:1.1}
+p{margin:0}
+a{color:var(--accent)}
+.lede{font-size:21px;line-height:1.55;color:var(--ink-2)}
+.eyebrow{
+  font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.18em;
+  text-transform:uppercase;color:var(--accent);margin:0
+}
+.stack{display:flex;flex-direction:column}
+.g8{gap:8px}.g12{gap:12px}.g16{gap:16px}.g20{gap:20px}.g28{gap:28px}.g40{gap:40px}
+
+/* ---------- hero ---------- */
+.hero{padding:80px 0 56px;border-bottom:1px solid var(--rule)}
+.hero h1{font-size:clamp(44px,7vw,84px);font-weight:800;letter-spacing:-.03em}
+.hero .lede{max-width:620px;margin-top:22px}
+.stats{
+  display:grid;grid-template-columns:repeat(2,1fr);
+  gap:1px;background:var(--rule);border:1px solid var(--rule);
+  border-radius:3px;overflow:hidden;margin-top:44px
+}
+@media(min-width:640px){ .stats{grid-template-columns:repeat(4,1fr)} }
+.stat{background:var(--surface);padding:18px 20px}
+.stat b{
+  display:block;font-family:var(--display);font-size:30px;font-weight:700;
+  letter-spacing:-.02em;font-variant-numeric:tabular-nums
+}
+.stat span{
+  display:block;font-family:var(--mono);font-size:10px;font-weight:500;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);margin-top:5px
+}
+
+section{padding:72px 0;border-bottom:1px solid var(--rule)}
+section > .wrap > .stack > h2{font-size:clamp(28px,3.6vw,40px);font-weight:700;letter-spacing:-.022em}
+
+/* ---------- narrative ---------- */
+.story{
+  background:var(--surface);border:1px solid var(--rule);border-radius:4px;
+  padding:32px 34px;max-width:720px
+}
+.story p + p{margin-top:15px}
+.story em{font-style:italic;color:var(--ink-2)}
+.tick{color:var(--accent);font-family:var(--mono);font-size:12px;font-weight:600}
+
+/* ---------- journey spine ---------- */
+.spine{position:relative;padding-left:0}
+@media(min-width:860px){
+  .spine{padding-left:132px}
+  .spine::before{
+    content:"";position:absolute;left:36px;top:14px;bottom:14px;
+    width:1px;background:var(--rule-strong)
+  }
+}
+.station{position:relative;padding-bottom:44px}
+.station:last-child{padding-bottom:0}
+.station .mark{
+  font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:8px
+}
+@media(min-width:860px){
+  .station .mark{position:absolute;left:-132px;top:4px;width:96px;text-align:right;margin:0}
+  .station::before{
+    content:"";position:absolute;left:-100px;top:9px;width:9px;height:9px;
+    border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px var(--paper)
+  }
+}
+.station h3{font-size:24px;font-weight:700;letter-spacing:-.015em}
+.station > p{margin-top:9px;color:var(--ink-2);max-width:620px}
+.triad{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(min(190px,100%),1fr));
+  gap:1px;background:var(--rule);border:1px solid var(--rule);
+  border-radius:3px;overflow:hidden;margin-top:20px;max-width:760px
+}
+.cell{background:var(--surface);padding:15px 17px}
+.cell h4{
+  font-family:var(--mono);font-size:9.5px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:7px
+}
+.cell p{font-size:15.5px;line-height:1.5}
+.cell.rec{background:var(--surface-2)}
+.cell.rec code{font-family:var(--mono);font-size:12.5px;color:var(--accent)}
+
+/* ---------- figures ---------- */
+figure{margin:0}
+.fig{
+  background:var(--surface);border:1px solid var(--rule);border-radius:4px;
+  padding:30px 26px 22px;overflow-x:auto
+}
+.fig svg{display:block;width:100%;height:auto;min-width:660px;color:var(--ink)}
+figcaption{
+  font-family:var(--mono);font-size:12px;line-height:1.65;color:var(--ink-3);
+  margin-top:16px;max-width:640px
+}
+
+/* ---------- apps ---------- */
+.apps{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(420px,100%),1fr));gap:20px}
+.appgroup{background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:20px 22px}
+.appgroup h4{
+  font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.14em;
+  text-transform:uppercase;display:flex;align-items:center;gap:9px;margin-bottom:4px
+}
+.chip{width:10px;height:10px;border-radius:2px;flex:none}
+.appgroup .note{font-size:14.5px;color:var(--ink-3);line-height:1.5;margin:8px 0 14px}
+.applist{display:flex;flex-wrap:wrap;gap:6px}
+.app{
+  font-family:var(--mono);font-size:12px;padding:4px 9px;border-radius:2px;
+  background:var(--surface-2);color:var(--ink-2);white-space:nowrap
+}
+
+/* ---------- tables ---------- */
+.tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:4px;background:var(--surface)}
+table{width:100%;border-collapse:collapse;font-size:16px;min-width:520px}
+th{
+  font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--ink-3);text-align:left;
+  padding:13px 18px;border-bottom:1px solid var(--rule)
+}
+td{padding:13px 18px;border-bottom:1px solid var(--rule);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.mono{font-family:var(--mono);font-size:13px;color:var(--ink-2);white-space:nowrap}
+.pill{
+  display:inline-block;font-family:var(--mono);font-size:10.5px;font-weight:600;
+  letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:2px;
+  white-space:nowrap
+}
+.pill.real{background:var(--accent-soft);color:var(--accent)}
+.pill.sim{background:var(--money-soft);color:var(--money)}
+
+/* ---------- callout ---------- */
+.callout{
+  border-left:3px solid var(--money);background:var(--money-soft);
+  padding:20px 24px;border-radius:0 3px 3px 0;max-width:700px
+}
+.callout h4{font-family:var(--display);font-size:18px;font-weight:700;margin-bottom:7px}
+.callout p{font-size:16.5px;line-height:1.55}
+
+.guards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:18px}
+.guard{background:var(--surface);border:1px solid var(--rule);border-radius:4px;padding:20px 22px}
+.guard h4{font-family:var(--display);font-size:17.5px;font-weight:700;margin-bottom:8px}
+.guard p{font-size:15.5px;line-height:1.55;color:var(--ink-2)}
+
+footer{padding:56px 0 80px}
+footer p{font-family:var(--mono);font-size:12.5px;color:var(--ink-3);line-height:1.8}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(prefers-reduced-motion:no-preference){
+  a{transition:opacity .15s}
+  a:hover{opacity:.7}
+}
+</style>
+
+<div class="hero">
+  <div class="wrap stack g16">
+    <p class="eyebrow">What we built</p>
+    <h1>A salesperson<br>that never sleeps.</h1>
+    <p class="lede">It writes the posts, answers the messages, books the slot, takes the deposit, sends the receipt, and quietly chases the people who go quiet — then writes down every single thing it did.</p>
+    <div class="stats">
+      <div class="stat"><b>8</b><span>stages</span></div>
+      <div class="stat"><b>28</b><span>apps wired in</span></div>
+      <div class="stat"><b>10</b><span>record books</span></div>
+      <div class="stat"><b>0</b><span>staff needed</span></div>
+    </div>
+  </div>
+</div>
+
+<section>
+  <div class="wrap stack g28">
+    <div class="col stack g12">
+      <p class="eyebrow">Start here</p>
+      <h2>Follow one customer through it</h2>
+      <p class="lede">Everything below actually happened in the system. These are real records from a real run — the names are made up, nothing else is.</p>
+    </div>
+    <div class="story stack">
+      <p><span class="tick">7:46am</span> &nbsp;A post goes out about two remaining studio slots. It goes to nine places at once — Facebook, Instagram, X, LinkedIn, WhatsApp, Discord, Reddit, Telegram, TikTok. Each copy carries its <em>own private link</em>, so we'll know exactly which one did the work.</p>
+      <p><span class="tick">7:46am</span> &nbsp;Mika, scrolling Telegram, taps the link. She lands in a chat. The system already knows she came from that Telegram post, and writes it down before she's typed a word.</p>
+      <p><span class="tick">7:47am</span> &nbsp;A greeting. She asks <em>"How much does a session cost? I want to book a slot."</em> She gets the real price back — &#8369;4,500 with a &#8369;1,500 deposit — and a booking link. Nobody was awake for this.</p>
+      <p><span class="tick">7:49am</span> &nbsp;She picks Thursday at 1pm. The system checks the calendar, sees it's open, and <em>holds it for twenty minutes</em> so nobody can take it while she's getting her card out.</p>
+      <p><span class="tick">7:49am</span> &nbsp;Deposit paid. Now the careful bit: before confirming, the system <em>checks the slot one more time</em> — because twenty minutes is long enough for someone else to have grabbed it. Still hers. Confirmed.</p>
+      <p><span class="tick">7:49am</span> &nbsp;Calendar invite created. Receipt emailed. Congratulations text sent. Balance of &#8369;3,000 noted as due on the day.</p>
+      <p><span class="tick">Later</span> &nbsp;Meanwhile, two other people who chatted that morning never opened the booking form. They're already sitting on a follow-up list with their names, how to reach them, and which post brought them in.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap stack g28">
+    <div class="col stack g12">
+      <p class="eyebrow">The whole thing at a glance</p>
+      <h2>Six steps forward, two ways out, everything written down</h2>
+      <p class="lede">The straight line across the top is the good path. The drops below it are the two ways a customer can fall out — and neither one loses them.</p>
+    </div>
+    <figure class="fig">
+      <svg viewBox="0 0 900 380" role="img" aria-label="The customer journey: post, click, chat, form, deposit, confirmed. People who go quiet drop to a follow-up list; a lost slot leads to a refund. Every step feeds the dashboard.">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+          </marker>
+          <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--money)"/>
+          </marker>
+        </defs>
+        <g font-family="IBM Plex Mono, monospace" font-size="12">
+          <!-- main stations -->
+          <g fill="none" stroke="currentColor" stroke-width="1.4">
+            <rect x="14"  y="52" width="118" height="52" rx="3"/>
+            <rect x="162" y="52" width="118" height="52" rx="3"/>
+            <rect x="310" y="52" width="118" height="52" rx="3"/>
+            <rect x="458" y="52" width="118" height="52" rx="3"/>
+            <rect x="606" y="52" width="118" height="52" rx="3"/>
+          </g>
+          <rect x="754" y="52" width="118" height="52" rx="3" fill="none" class="acc" stroke-width="2.4"/>
+          <g text-anchor="middle" fill="currentColor" font-weight="500">
+            <text x="73"  y="76">Post goes</text><text x="73"  y="91">out</text>
+            <text x="221" y="76">Someone</text><text x="221" y="91">taps it</text>
+            <text x="369" y="76">Chat</text><text x="369" y="91">answers</text>
+            <text x="517" y="76">Picks a</text><text x="517" y="91">slot</text>
+            <text x="665" y="76">Pays the</text><text x="665" y="91">deposit</text>
+          </g>
+          <text x="813" y="76" text-anchor="middle" class="acc-f" font-weight="600">Confirmed</text>
+          <text x="813" y="91" text-anchor="middle" class="acc-f" font-weight="600">booking</text>
+
+          <!-- forward arrows -->
+          <g stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)">
+            <line x1="132" y1="78" x2="158" y2="78"/>
+            <line x1="280" y1="78" x2="306" y2="78"/>
+            <line x1="428" y1="78" x2="454" y2="78"/>
+            <line x1="576" y1="78" x2="602" y2="78"/>
+            <line x1="724" y1="78" x2="750" y2="78"/>
+          </g>
+
+          <!-- drop-outs -->
+          <g class="wrn" stroke-width="1.4" marker-end="url(#arw)" fill="none">
+            <path d="M369,104 L369,150 L436,150"/>
+            <path d="M517,104 L517,124"/>
+            <path d="M665,104 L665,214 L744,214"/>
+          </g>
+          <rect x="440" y="128" width="182" height="44" rx="3" fill="none" class="wrn" stroke-width="1.6"/>
+          <text x="531" y="147" text-anchor="middle" class="wrn-f" font-weight="600">Went quiet —</text>
+          <text x="531" y="162" text-anchor="middle" class="wrn-f" font-weight="600">chased once, later</text>
+
+          <rect x="748" y="192" width="138" height="44" rx="3" fill="none" class="wrn" stroke-width="1.6"/>
+          <text x="817" y="211" text-anchor="middle" class="wrn-f" font-weight="600">Slot gone —</text>
+          <text x="817" y="226" text-anchor="middle" class="wrn-f" font-weight="600">money back</text>
+
+          <!-- collector -->
+          <g stroke="currentColor" stroke-width="1" opacity=".45" stroke-dasharray="3 4">
+            <line x1="73"  y1="104" x2="73"  y2="286"/>
+            <line x1="221" y1="104" x2="221" y2="286"/>
+            <line x1="369" y1="172" x2="369" y2="286"/>
+            <line x1="531" y1="172" x2="531" y2="286"/>
+            <line x1="665" y1="236" x2="665" y2="286"/>
+            <line x1="813" y1="104" x2="813" y2="192"/>
+            <line x1="813" y1="236" x2="813" y2="286"/>
+          </g>
+          <line x1="60" y1="286" x2="826" y2="286" stroke="currentColor" stroke-width="1" opacity=".45"/>
+          <line x1="443" y1="286" x2="443" y2="308" stroke="currentColor" stroke-width="1.4" marker-end="url(#ar)"/>
+          <rect x="14" y="314" width="858" height="48" rx="3" fill="none" class="acc" stroke-width="2"/>
+          <text x="443" y="344" text-anchor="middle" class="acc-f" font-weight="600" font-size="13">One dashboard — every post, click, conversation, booking, payment and follow-up</text>
+        </g>
+      </svg>
+      <figcaption>Nobody is lost. Go quiet before booking and you land on a follow-up list. Lose your slot after paying and the money comes back. Both outcomes are recorded, not swallowed.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <div class="wrap stack g40">
+    <div class="col stack g12">
+      <p class="eyebrow">Stage by stage</p>
+      <h2>What happens at each step</h2>
+      <p class="lede">Three things are worth separating: what your customer experiences, what the machine is doing while they do it, and what gets permanently written down.</p>
+    </div>
+
+    <div class="spine stack">
+      <div class="station">
+        <p class="mark">Stage 1</p>
+        <h3>The post goes out</h3>
+        <p>You write a caption once. It goes to nine platforms — each with its own tracking link hidden in it, and each trimmed to fit that platform's limits.</p>
+        <div class="triad">
+          <div class="cell"><h4>They see</h4><p>A normal post in their feed with a link.</p></div>
+          <div class="cell"><h4>Behind it</h4><p>Nine separate links minted, one per platform. X only allows 280 characters, so the caption is shortened there — but the link is never cut.</p></div>
+          <div class="cell rec"><h4>Written down</h4><p>One row per platform: exact wording sent, length, whether it was shortened, when. <code>social_post_log</code></p></div>
+        </div>
+      </div>
+
+      <div class="station">
+        <p class="mark">Stage 2</p>
+        <h3>Someone taps the link</h3>
+        <p>The link doesn't go straight to your chat. It passes through, stamps a hidden code onto that person, and forwards them on — all in a fraction of a second.</p>
+        <div class="triad">
+          <div class="cell"><h4>They see</h4><p>They tap, and a chat opens. That's it.</p></div>
+          <div class="cell"><h4>Behind it</h4><p>A one-off code is attached so their later messages can be traced back to this exact post. Link-preview robots are spotted and excluded so they don't inflate your numbers.</p></div>
+          <div class="cell rec"><h4>Written down</h4><p>Which post, which platform, when, and whether it was a real person. <code>click_events</code></p></div>
+        </div>
+      </div>
+
+      <div class="station">
+        <p class="mark">Stage 3</p>
+        <h3>The chat answers</h3>
+        <p>A greeting, then real answers to real questions — pricing, hours, location, how long a session runs. If it doesn't know, it says so instead of guessing.</p>
+        <div class="triad">
+          <div class="cell"><h4>They see</h4><p>An instant, correct reply at any hour.</p></div>
+          <div class="cell"><h4>Behind it</h4><p>The hidden code is swapped for the post that sent them. If they've messaged before, they keep their <em>original</em> post credit — a second visit can't steal it.</p></div>
+          <div class="cell rec"><h4>Written down</h4><p>Both sides of every conversation, plus a contact record. <code>messages</code> <code>contacts</code></p></div>
+        </div>
+      </div>
+
+      <div class="station">
+        <p class="mark">Stage 4</p>
+        <h3>They pick a slot</h3>
+        <p>A short form: name, email, phone, preferred date and time. The system checks the calendar before it asks for a single peso.</p>
+        <div class="triad">
+          <div class="cell"><h4>They see</h4><p>Either "your slot is held" with a payment link, or a polite "that one's gone — pick another", saying why.</p></div>
+          <div class="cell"><h4>Behind it</h4><p>The slot is held for twenty minutes. If someone else's hold has expired, that slot quietly becomes available again.</p></div>
+          <div class="cell rec"><h4>Written down</h4><p>The booking at "form submitted", plus the hold and its expiry. <code>bookings</code> <code>slots</code></p></div>
+        </div>
+      </div>
+
+      <div class="station">
+        <p class="mark">Stage 5</p>
+        <h3>The deposit</h3>
+        <p>They pay. Then — and this is the part worth paying attention to — the system checks the slot <em>again</em> before confirming anything.</p>
+        <div class="triad">
+          <div class="cell"><h4>They see</h4><p>A confirmation naming the deposit paid and the balance still due on the day.</p></div>
+          <div class="cell"><h4>Behind it</h4><p>Twenty minutes is long enough for a slot to be taken. If it's gone, the booking isn't confirmed and the deposit is returned rather than double-booking your studio.</p></div>
+          <div class="cell rec"><h4>Written down</h4><p>The payment, the confirmed booking, the calendar entry. <code>payments</code> <code>bookings</code></p></div>
+        </div>
+      </div>
+
+      <div class="station">
+        <p class="mark">Stage 6</p>
+        <h3>Receipt and congratulations</h3>
+        <p>A receipt by email and a warm text message, sent the moment the money lands.</p>
+        <div class="triad">
+          <div class="cell"><h4>They see</h4><p>An email receipt and an SMS. A calendar invite lands too.</p></div>
+          <div class="cell"><h4>Behind it</h4><p>Both go out at once rather than one after the other, so a failure in one can't hold up the other.</p></div>
+          <div class="cell rec"><h4>Written down</h4><p>Every message sent, to whom, and whether it arrived. <code>notifications</code></p></div>
+        </div>
+      </div>
+
+      <div class="station">
+        <p class="mark">Stage 7</p>
+        <h3>The quiet ones get chased</h3>
+        <p>Every hour, the system looks for people who started but stopped — and nudges them. Exactly once.</p>
+        <div class="triad">
+          <div class="cell"><h4>They see</h4><p>One friendly reminder, by text if you have their number, otherwise by email. Never a second one.</p></div>
+          <div class="cell"><h4>Behind it</h4><p>Anyone stuck for more than a day gets one nudge, and is then marked so nobody is ever pestered twice. People who only chatted and never reached the form are on this list too.</p></div>
+          <div class="cell rec"><h4>Written down</h4><p>The nudge sent and a count against that person. <code>notifications</code> <code>bookings</code></p></div>
+        </div>
+      </div>
+
+      <div class="station">
+        <p class="mark">Stage 8</p>
+        <h3>Everything lands in one place</h3>
+        <p>A single page showing every post, click, conversation, booking, payment and follow-up — with buttons to send it wherever you want it.</p>
+        <div class="triad">
+          <div class="cell"><h4>You see</h4><p>Headline numbers, which posts actually worked, and exactly who still needs chasing.</p></div>
+          <div class="cell"><h4>Behind it</h4><p>All ten record books are read and combined in one place, so the numbers on the page and the numbers in an export can never disagree.</p></div>
+          <div class="cell rec"><h4>Written down</h4><p>Nothing new — this stage only reads. Failures elsewhere land in <code>ops_events</code></p></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap stack g28">
+    <div class="col stack g12">
+      <p class="eyebrow">The careful bit</p>
+      <h2>How two people can't book the same slot</h2>
+      <p class="lede">This is the failure that costs you a customer and an apology. Here's how it's prevented — the bar in the middle is the slot itself, changing hands over the course of an afternoon.</p>
+    </div>
+    <figure class="fig">
+      <svg viewBox="0 0 900 340" role="img" aria-label="A timeline showing a studio slot changing state from free, to held by person A, to free again when A's hold expires, to held by person B, to booked by B. When A finally pays, the system re-checks, finds the slot gone, and refunds instead of double-booking.">
+        <defs>
+          <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--money)"/>
+          </marker>
+        </defs>
+        <g font-family="IBM Plex Mono, monospace" font-size="12">
+          <text x="12" y="42" fill="currentColor" font-weight="600" font-size="11">ANA</text>
+          <text x="12" y="274" fill="currentColor" font-weight="600" font-size="11">BEN</text>
+
+          <!-- Ana events -->
+          <g fill="currentColor">
+            <text x="112" y="42" font-weight="500">checks — free</text>
+            <text x="112" y="58" opacity=".62" font-size="11">slot held for her</text>
+            <text x="592" y="42" font-weight="500">finally pays</text>
+          </g>
+          <g stroke="currentColor" stroke-width="1.2" opacity=".5">
+            <line x1="150" y1="66" x2="150" y2="128"/>
+            <line x1="628" y1="66" x2="628" y2="128"/>
+          </g>
+
+          <!-- the slot bar -->
+          <g stroke-width="1.4">
+            <rect x="70"  y="132" width="120" height="46" rx="3" fill="none" stroke="currentColor" opacity=".55"/>
+            <rect x="190" y="132" width="180" height="46" rx="3" fill="none" stroke="currentColor"/>
+            <rect x="370" y="132" width="120" height="46" rx="3" fill="none" stroke="currentColor" opacity=".55"/>
+            <rect x="490" y="132" width="140" height="46" rx="3" fill="none" class="acc" stroke-width="2"/>
+            <rect x="630" y="132" width="240" height="46" rx="3" class="acc-wash" stroke-width="2.4"/>
+          </g>
+          <g text-anchor="middle" font-size="11" font-weight="600">
+            <text x="130" y="153" fill="currentColor" opacity=".7">FREE</text>
+            <text x="280" y="153" fill="currentColor">HELD BY ANA</text>
+            <text x="280" y="168" fill="currentColor" opacity=".6" font-weight="400">20 minutes</text>
+            <text x="430" y="153" fill="currentColor" opacity=".7">FREE AGAIN</text>
+            <text x="430" y="168" fill="currentColor" opacity=".55" font-weight="400">hold lapsed</text>
+            <text x="560" y="153" class="acc-f">HELD BY BEN</text>
+            <text x="750" y="153" class="acc-f">BOOKED BY BEN</text>
+            <text x="750" y="168" class="acc-f" opacity=".75" font-weight="400">deposit paid, confirmed</text>
+          </g>
+
+          <!-- Ben events -->
+          <g class="acc" stroke-width="1.2" opacity=".65">
+            <line x1="500" y1="182" x2="500" y2="248"/>
+            <line x1="640" y1="182" x2="640" y2="248"/>
+          </g>
+          <g class="acc-f">
+            <text x="462" y="270" font-weight="500">checks — free</text>
+            <text x="606" y="270" font-weight="500">pays</text>
+            <text x="606" y="286" opacity=".7" font-size="11">confirmed</text>
+          </g>
+
+          <!-- the re-check -->
+          <path d="M628,182 L628,206 L700,206" fill="none" class="wrn" stroke-width="1.6" marker-end="url(#ar2)"/>
+          <rect x="704" y="186" width="182" height="42" rx="3" fill="none" class="wrn" stroke-width="1.6"/>
+          <text x="795" y="203" text-anchor="middle" class="wrn-f" font-weight="600" font-size="11">RE-CHECK: IT'S GONE</text>
+          <text x="795" y="218" text-anchor="middle" class="wrn-f" font-size="11">deposit refunded</text>
+
+          <line x1="70" y1="308" x2="870" y2="308" stroke="currentColor" stroke-width="1" opacity=".3"/>
+          <text x="70" y="328" fill="currentColor" opacity=".5" font-size="10.5">time</text>
+        </g>
+      </svg>
+      <figcaption>Ana held the slot, wandered off, and her hold lapsed. Ben took it properly. When Ana's payment finally arrived, the system looked again before confirming — found the slot gone, and refunded her instead of putting two people in the studio at once.</figcaption>
+    </figure>
+    <div class="callout">
+      <h4>Why this is worth mentioning</h4>
+      <p>Most booking systems check availability once, at the start. The gap between "I'll take it" and "here's my card" is where double-bookings are born. This one checks twice — before the money and again after it — and treats a lost slot as a refund, not an apology.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap stack g28">
+    <div class="col stack g12">
+      <p class="eyebrow">Connections</p>
+      <h2>The apps that plug in</h2>
+      <p class="lede">Twenty-eight app connections are already placed in the flow with their settings filled in, and every one of them is switched off. Turning one on means signing in — nothing needs rebuilding.</p>
+    </div>
+    <div class="apps">
+      <div class="appgroup">
+        <h4><span class="chip" style="background:var(--accent)"></span>Social platforms</h4>
+        <p class="note">Where your posts go, each with its own tracking link.</p>
+        <div class="applist">
+          <span class="app">Facebook</span><span class="app">Instagram</span><span class="app">X</span>
+          <span class="app">LinkedIn</span><span class="app">WhatsApp</span><span class="app">Discord</span>
+          <span class="app">Reddit</span><span class="app">Telegram</span><span class="app">TikTok</span>
+        </div>
+      </div>
+      <div class="appgroup">
+        <h4><span class="chip" style="background:var(--money)"></span>Customer records</h4>
+        <p class="note">Where your leads and bookings can be pushed automatically.</p>
+        <div class="applist">
+          <span class="app">Salesforce</span><span class="app">GoHighLevel</span><span class="app">HubSpot</span>
+          <span class="app">Pipedrive</span><span class="app">Google Sheets</span>
+        </div>
+      </div>
+      <div class="appgroup">
+        <h4><span class="chip" style="background:var(--violet)"></span>Storage</h4>
+        <p class="note">For when you outgrow the built-in tables.</p>
+        <div class="applist">
+          <span class="app">Postgres</span><span class="app">MySQL</span><span class="app">MongoDB</span>
+          <span class="app">Airtable</span><span class="app">Supabase</span>
+        </div>
+      </div>
+      <div class="appgroup">
+        <h4><span class="chip" style="background:var(--good)"></span>Doing the work</h4>
+        <p class="note">Calendar, payments, and the messages that go out.</p>
+        <div class="applist">
+          <span class="app">Google Calendar</span><span class="app">Stripe</span><span class="app">Gmail</span>
+          <span class="app">Twilio SMS</span><span class="app">Telegram</span><span class="app">Slack</span>
+        </div>
+      </div>
+    </div>
+    <p class="lede col">Power BI and Looker Studio need nothing installed at all — they read straight from the dashboard's web address.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap stack g28">
+    <div class="col stack g12">
+      <p class="eyebrow">Being straight with you</p>
+      <h2>What's real today, what's pretending</h2>
+      <p class="lede">This is a working demonstration, not a live business. Everything runs end to end — but four things are stand-ins, and you should know which.</p>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th style="width:30%">Part</th><th style="width:12%">Status</th><th>What that means</th></tr></thead>
+        <tbody>
+          <tr><td>Tracking links &amp; attribution</td><td><span class="pill real">Real</span></td><td>Genuinely mints a unique link per platform and traces clicks back correctly.</td></tr>
+          <tr><td>The chat's answers</td><td><span class="pill real">Real</span></td><td>Matches questions against a list of answers you can edit. Not an AI — deliberately, so it can't invent a price.</td></tr>
+          <tr><td>Slot holding &amp; the double-booking guard</td><td><span class="pill real">Real</span></td><td>Fully working. Tested by making two people fight over one slot.</td></tr>
+          <tr><td>Every record and the dashboard</td><td><span class="pill real">Real</span></td><td>All ten record books are written and read for real.</td></tr>
+          <tr><td>The calendar</td><td><span class="pill sim">Stand-in</span></td><td>A table of slots instead of Google Calendar. Swaps over in one step.</td></tr>
+          <tr><td>The payment</td><td><span class="pill sim">Stand-in</span></td><td>A link that says "succeeded" or "failed" instead of Stripe. No card is ever charged.</td></tr>
+          <tr><td>Receipts and text messages</td><td><span class="pill sim">Stand-in</span></td><td>Recorded as if sent. Nothing reaches an inbox or a phone.</td></tr>
+          <tr><td>Posting to social media</td><td><span class="pill sim">Stand-in</span></td><td>Links are built and logged; nothing is actually published to any platform.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap stack g28">
+    <div class="col stack g12">
+      <p class="eyebrow">What you can see</p>
+      <h2>The numbers, and where they can go</h2>
+    </div>
+    <div class="guards">
+      <div class="guard"><h4>Which posts actually worked</h4><p>Every published post appears — including the ones nobody clicked. Those are usually the more useful ones to know about, and most systems hide them.</p></div>
+      <div class="guard"><h4>Who still needs chasing</h4><p>A live list of people who started and stopped, with their name, best contact method, and whether they've already been nudged.</p></div>
+      <div class="guard"><h4>Money in</h4><p>Deposits collected, payments that failed, and the balance still owed on confirmed bookings.</p></div>
+      <div class="guard"><h4>Conversations handled</h4><p>How many messages came in and went out, and how many emails and texts the system sent on your behalf.</p></div>
+      <div class="guard"><h4>Anything that broke</h4><p>Every failure recorded with what broke, where, and when — so a silent problem can't stay silent.</p></div>
+      <div class="guard"><h4>Take it anywhere</h4><p>One click gives you a spreadsheet of leads for your CRM, or a live feed Power BI and Looker Studio can read directly.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap stack g28">
+    <div class="col stack g12">
+      <p class="eyebrow">When things go wrong</p>
+      <h2>The parts nobody thinks to ask about</h2>
+      <p class="lede">Most of the care in a system like this goes into the paths you hope never happen.</p>
+    </div>
+    <div class="guards">
+      <div class="guard"><h4>A payment fails</h4><p>The booking simply isn't confirmed, the slot is released, and the customer is told plainly which of the three things went wrong.</p></div>
+      <div class="guard"><h4>Someone abandons a hold</h4><p>Their twenty minutes lapse and the slot returns to the pool automatically. No manual tidying, no slot sitting dead.</p></div>
+      <div class="guard"><h4>A record fails to save</h4><p>Logging never blocks the customer. A lost log line is annoying; a customer who never got their reply is worse.</p></div>
+      <div class="guard"><h4>Link-preview robots</h4><p>When a chat app fetches your link to build a preview, that isn't counted as a person tapping it. Your click numbers stay honest.</p></div>
+      <div class="guard"><h4>Somebody messages twice</h4><p>They keep the credit of the post that first brought them in. A later visit can't quietly steal it from the post that earned it.</p></div>
+      <div class="guard"><h4>Anything else</h4><p>Any failure anywhere is caught, written down with the exact step that broke, and surfaced on the dashboard rather than disappearing.</p></div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="col stack g8">
+      <p>Built and tested end to end. Every stage above was run against the live system, and the customer story is taken from real records.</p>
+      <p>Switching any part from stand-in to live means signing in to that service — the flow, the records and the dashboard stay exactly as they are.</p>
+    </div>
+  </div>
+</footer>
