@@ -27,7 +27,7 @@ return [{ json: {
 });
 const errWrite = node({
   type: 'n8n-nodes-base.dataTable', version: 1.1,
-  config: { name: 'A3 Write ops_events', position: [720, 0], parameters: { resource: 'row', operation: 'insert',
+  config: { name: 'A3 Write ops_events', position: [1080, 0], parameters: { resource: 'row', operation: 'insert',
     dataTableId: { __rl: true, mode: 'list', value: 'RnlzXRfhSe8rRWiq', cachedResultName: 'ops_events' },
     columns: { mappingMode: 'autoMapInputData', value: null, matchingColumns: [] } } },
   output: [{ id: 1 }]
@@ -911,12 +911,107 @@ const dashCsvServe = node({
   output: [{}]
 });
 
+const slackAlert = node({
+  type: 'n8n-nodes-base.slack', version: 2.7,
+  config: { name: 'A4 Slack Alert', position: [720, 0], disabled: true, parameters: { resource: 'message', operation: 'post',
+    authentication: 'accessToken', select: 'channel',
+    channelId: { __rl: true, mode: 'name', value: '#ops-alerts' },
+    messageType: 'text',
+    text: expr("{{ ':rotating_light: *' + $json.workflow_name + '* failed at *' + $json.node_name + '*\\n' + $json.message + '\\n' + $json.execution_url }}"),
+    otherOptions: { includeLinkToWorkflow: false } } },
+  output: [{}]
+});
+const tgReply = node({
+  type: 'n8n-nodes-base.telegram', version: 1.2,
+  config: { name: 'C12a Telegram — Send Reply', position: [4680, 1400], disabled: true, parameters: { resource: 'message', operation: 'sendMessage',
+    chatId: expr("{{ $('C3 Normalize Inbound').first().json.user_id }}"),
+    text: expr("{{ $('C10 Compose Reply').first().json.reply }}"),
+    replyMarkup: 'none',
+    additionalFields: { appendAttribution: false, parse_mode: 'HTML' } } },
+  output: [{}]
+});
+const gcalAvail = node({
+  type: 'n8n-nodes-base.googleCalendar', version: 1.3,
+  config: { name: 'D3b Google Calendar — Availability', position: [720, 1900], disabled: true, parameters: { resource: 'calendar', operation: 'availability',
+    calendar: expr("{{ 'studio@example.com' }}"),
+    timeMin: expr("{{ $('D1 Booking Form').first().json['Preferred date'] + 'T' + $('D1 Booking Form').first().json['Preferred time'] + ':00.000Z' }}"),
+    timeMax: expr("{{ new Date(new Date($('D1 Booking Form').first().json['Preferred date'] + 'T' + $('D1 Booking Form').first().json['Preferred time'] + ':00.000Z').getTime() + 90*60000).toISOString() }}"),
+    options: { outputFormat: 'availability' } } },
+  output: [{}]
+});
+const stripeCharge = node({
+  type: 'n8n-nodes-base.stripe', version: 1,
+  config: { name: 'E5a Stripe — Retrieve Charge', position: [1440, 2760], disabled: true, parameters: { resource: 'charge', operation: 'get',
+    chargeId: expr("{{ $('E1 Payment Callback').first().json.query.charge_id }}") } },
+  output: [{}]
+});
+const gcalCreate = node({
+  type: 'n8n-nodes-base.googleCalendar', version: 1.3,
+  config: { name: 'E8b Google Calendar — Create Event', position: [3240, 2900], disabled: true, parameters: { resource: 'event', operation: 'create',
+    calendar: expr("{{ 'studio@example.com' }}"),
+    start: expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.slot_start }}"),
+    end: expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.slot_end }}"),
+    useDefaultReminders: true,
+    additionalFields: {
+      summary: expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.service + ' — ' + $('E3 Verify and Re-check Slot').first().json.booking.full_name }}"),
+      description: expr("{{ 'Booking ' + $('E3 Verify and Re-check Slot').first().json.booking.booking_id + '. Deposit paid, balance ' + $('E3 Verify and Re-check Slot').first().json.booking.currency + ' ' + $('E3 Verify and Re-check Slot').first().json.booking.balance_due + ' due on the day.' }}"),
+      attendees: [expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.email }}")],
+      sendUpdates: 'all'
+    } } },
+  output: [{}]
+});
+const gmailReceipt = node({
+  type: 'n8n-nodes-base.gmail', version: 2.2,
+  config: { name: 'E9a Gmail — Send Receipt', position: [3600, 3060], disabled: true, parameters: { resource: 'message', operation: 'send',
+    sendTo: expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.email }}"),
+    subject: expr("{{ 'Your booking is confirmed — ' + $('E3 Verify and Re-check Slot').first().json.booking.booking_id }}"),
+    emailType: 'html',
+    message: expr("{{ '<p>Hi ' + $('E3 Verify and Re-check Slot').first().json.booking.full_name + ',</p><p>Your ' + $('E3 Verify and Re-check Slot').first().json.booking.service + ' is confirmed for <strong>' + $('E3 Verify and Re-check Slot').first().json.booking.slot_start + '</strong>.</p><p>Deposit received: ' + $('E3 Verify and Re-check Slot').first().json.booking.currency + ' ' + $('E3 Verify and Re-check Slot').first().json.booking.deposit_amount + '<br>Balance due on the day: ' + $('E3 Verify and Re-check Slot').first().json.booking.currency + ' ' + $('E3 Verify and Re-check Slot').first().json.booking.balance_due + '</p>' }}"),
+    options: { appendAttribution: false, senderName: 'The Studio' } } },
+  output: [{}]
+});
+const twilioSms = node({
+  type: 'n8n-nodes-base.twilio', version: 1,
+  config: { name: 'E9b Twilio — Send SMS', position: [3960, 3060], disabled: true, parameters: { resource: 'sms', operation: 'send',
+    from: '+15550000000',
+    to: expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.phone }}"),
+    toWhatsapp: false,
+    message: expr("{{ 'Confirmed! ' + $('E3 Verify and Re-check Slot').first().json.booking.service + ' on ' + $('E3 Verify and Re-check Slot').first().json.booking.slot_start + '. Balance ' + $('E3 Verify and Re-check Slot').first().json.booking.currency + ' ' + $('E3 Verify and Re-check Slot').first().json.booking.balance_due + ' due on the day. See you then!' }}"),
+    options: {} } },
+  output: [{}]
+});
+const twilioChase = node({
+  type: 'n8n-nodes-base.twilio', version: 1,
+  config: { name: 'F4a Twilio — Chase SMS', position: [1080, 3400], disabled: true, parameters: { resource: 'sms', operation: 'send',
+    from: '+15550000000', to: expr('{{ $json.recipient }}'), toWhatsapp: false,
+    message: expr("{{ 'Still thinking it over? Your slot is waiting — finish your booking here: https://gipre.app.n8n.cloud/form/book' }}"),
+    options: {} } },
+  output: [{}]
+});
+const gmailChase = node({
+  type: 'n8n-nodes-base.gmail', version: 2.2,
+  config: { name: 'F4b Gmail — Chase Email', position: [1440, 3400], disabled: true, parameters: { resource: 'message', operation: 'send',
+    sendTo: expr('{{ $json.recipient }}'), subject: 'Your slot is still available', emailType: 'html',
+    message: '<p>You started a booking with us but never finished.</p><p>Your preferred slot is still free — <a href="https://gipre.app.n8n.cloud/form/book">pick up where you left off</a>.</p>',
+    options: { appendAttribution: false, senderName: 'The Studio' } } },
+  output: [{}]
+});
+const sfLead = node({
+  type: 'n8n-nodes-base.salesforce', version: 1.1,
+  config: { name: 'G12a Salesforce — Create Lead', position: [4320, 4740], disabled: true, parameters: { resource: 'lead', operation: 'create',
+    authentication: 'oAuth2',
+    company: expr('{{ $json.dataset }}'), lastname: expr('{{ $json.dataset }}'),
+    additionalFields: { leadSource: 'n8n Booking Funnel',
+      description: expr("{{ 'Imported from the funnel dashboard — ' + $json.row_count + ' ' + $json.dataset + ' rows.' }}") } } },
+  output: [{}]
+});
+
 const readme = sticky("# Booking Funnel — All in One\n## Every branch of the funnel on a single canvas. Fully simulated, zero credentials.\n\nSeven independent entry points share one workflow and one set of eleven data tables. Each trigger runs its own isolated execution, so the branches never interfere with each other.\n\n| Branch | Entry point |\n| --- | --- |\n| **A** Error handler | fires on this workflow's own failures |\n| **B** Click router | `GET /webhook/go?p=post_001&c=telegram` |\n| **C** Chat + agent | `POST /webhook/chat` |\n| **D** Booking form | the form trigger's public URL |\n| **E** Payment callback | `GET /webhook/pay?booking_id=…&outcome=success` |\n| **F** Nurture sweep | hourly schedule |\n| **G** Dashboard | `GET /webhook/dashboard` |\n\n### What is simulated\nThe calendar (a real `slots` table both D and E read — booked, or held until an expiry — rather than a formula), the payment (a link with `outcome=success` or `fail`), the receipt email and SMS (rows written as if delivered), and the LLM (keyword scoring over the `faq` table).\n\n### The tradeoff you accepted\nOne workflow means activation is all-or-nothing — you cannot pause the hourly sweep without also taking down the webhooks. Fine for a simulation; revisit before real money moves through it.", [], {
   name: 'README', position: [0, -620], width: 1500, height: 520, color: 7
 });
 const banA = sticky("## A · Error handling\nAn Error Trigger inside the workflow it monitors — n8n fires it automatically on any production failure, no settings needed. Every failure becomes an `ops_events` row, which is what the dashboard's error count reads.", [], { name: 'Band A', position: [1120, -60], width: 700, height: 120, color: 3 });
 const banB = sticky("## B · Click router — the entry point\nA tracked link in a post caption. Mints an attribution token, builds the platform's chat deep link, logs the click, then 302s. Bot hits are flagged, not dropped, so previewers cannot inflate your numbers.", [], { name: 'Band B', position: [2560, 640], width: 760, height: 120, color: 4 });
-const banC = sticky("## C · Chat and agent\nTrades the token for the click row — this is where attribution actually happens. Answers from the `faq` table by keyword scoring, logs both sides, and offers the booking link when someone asks to book.", [], { name: 'Band C', position: [4720, 1340], width: 760, height: 120, color: 5 });
+const banC = sticky("## C · Chat and agent\nTrades the token for the click row — this is where attribution actually happens. Answers from the `faq` table by keyword scoring, logs both sides, and offers the booking link when someone asks to book.", [], { name: 'Band C', position: [5400, 1340], width: 760, height: 120, color: 5 });
 const banD = sticky("## D · Booking and deposit\nChecks the slot **before** taking money, holds it with an expiry, then shows a simulated payment link. A taken slot ends the form politely rather than charging for something unavailable.", [], { name: 'Band D', position: [3240, 2140], width: 760, height: 120, color: 4 });
 const banE = sticky("## E · Payment and confirmation\n**Re-checks the slot after payment** — the race that would otherwise double-book. If it was lost, the deposit is refunded rather than the customer being quietly overbooked. On success: calendar event, receipt, SMS.", [], { name: 'Band E', position: [4680, 2840], width: 780, height: 120, color: 6 });
 const banF = sticky("## F · Follow-up nurture\nHourly sweep for bookings stuck at `form_opened`, `form_submitted` or `checkout_started` for over 24 hours. Chases once, then stamps `chase_count` so nobody is pestered twice.", [], { name: 'Band F', position: [2560, 3640], width: 760, height: 120, color: 2 });
@@ -924,7 +1019,7 @@ const banG = sticky("## G · Dashboard and exports — where every branch lands\
 
 const cA1 = sticky("### A1 · Workflow Failed\n`Error Trigger`\n\n**In:** the failing execution, from n8n itself.\n**Out:** the raw error payload.", [], { name: 'c A1', position: [0, 140], width: 300, height: 190, color: 3 });
 const cA2 = sticky("### A2 · Build Ops Event\n`Code`\n\n**Does:** flattens the nested error and clips every field so a stack trace cannot break the insert.\n**Out:** 1 `ops_events` row.", [], { name: 'c A2', position: [360, 140], width: 300, height: 200, color: 5 });
-const cA3 = sticky("### A3 · Write ops_events\n`Data table` · insert\n\n**Out:** the stored row. Feeds the dashboard's error count.", [], { name: 'c A3', position: [720, 140], width: 300, height: 180, color: 6 });
+const cA3 = sticky("### A3 · Write ops_events\n`Data table` · insert\n\n**Out:** the stored row. Feeds the dashboard's error count.", [], { name: 'c A3', position: [1080, 140], width: 300, height: 180, color: 6 });
 const cB1 = sticky("### B1 · Inbound Click\n`Webhook` GET /go\n\n**In:** `?p=` post, `?c=` channel.\n**Out:** query + headers.\n\nThis is the link you put in a caption.", [], { name: 'c B1', position: [0, 840], width: 300, height: 200, color: 7 });
 const cB2 = sticky("### B2 · Channel Config\n`Set`\n\n**Out:** your handle per platform.\n\n👉 **Edit this node.** Ships with placeholders.", [], { name: 'c B2', position: [360, 840], width: 300, height: 200, color: 4 });
 const cB3 = sticky("### B3 · Resolve Redirect\n`Code`\n\n**Does:** mints the a-z0-9 token Telegram accepts, builds the deep link, sniffs the UA for crawlers.\n**Out:** `ok` `redirect_target` `attribution_token` `is_bot`", [], { name: 'c B3', position: [720, 840], width: 300, height: 230, color: 5 });
@@ -993,17 +1088,37 @@ const cG13 = sticky("### G13 · Serve CSV\n`Respond` 200 text/csv\n\nSends `cont
 const cG14 = sticky("### G14 · payments\n`Data table` · get all\n\nWas write-only until now — money was recorded and never reported.", [], { name: 'c G14', position: [2160, 4540], width: 300, height: 190, color: 6 });
 const cG15 = sticky("### G15 · contacts\n`Data table` · get all\n\nWhere the **chatted but never booked** leads come from. Without this the follow-up list only saw people who reached the form.", [], { name: 'c G15', position: [2520, 4540], width: 300, height: 210, color: 6 });
 
+const cSlack = sticky("### A4 · Slack\n`Post Message` · **disabled**\n\nFailure alerts into #ops-alerts. Nothing else on the canvas does this — it is pure addition.", [], { name: 'c A4', position: [720, 140], width: 300, height: 190, color: 4 });
+const cTgReply = sticky("### C12a · Telegram\n`Send Message` · **disabled**\n\nIn production this **is** the delivery — C13's JSON response is the stand-in.\n\nChat id and text are already mapped from C3 and C10.", [], { name: 'c C12a', position: [4680, 1540], width: 300, height: 230, color: 4 });
+const cGcalAvail = sticky("### D3b · Google Calendar\n`Availability` · **disabled**\n\nThe real version of **D3a**. Same question — is this slot free — asked of Google instead of the `slots` table.", [], { name: 'c D3b', position: [720, 1700], width: 300, height: 180, color: 4 });
+const cStripe = sticky("### E5a · Stripe\n`Get Charge` · **disabled**\n\nReplaces the invented payment in **E5** with the real charge. Pair with a Stripe Trigger on E1.", [], { name: 'c E5a', position: [1440, 2600], width: 300, height: 150, color: 4 });
+const cGcalCreate = sticky("### E8b · Google Calendar\n`Create Event` · **disabled**\n\nThe real calendar write. **E8a** marks the `slots` row booked; this puts it in the studio's actual calendar and invites the customer.", [], { name: 'c E8b', position: [3240, 3060], width: 300, height: 210, color: 4 });
+const cGmailReceipt = sticky("### E9a · Gmail\n`Send` · **disabled**\n\nThe receipt **E9** only pretends to send. Subject and HTML body are already built from the booking.", [], { name: 'c E9a', position: [3600, 3260], width: 300, height: 190, color: 4 });
+const cTwilioSms = sticky("### E9b · Twilio\n`Send SMS` · **disabled**\n\nThe congratulatory text. `from` is a placeholder number — the only field you must change.", [], { name: 'c E9b', position: [3960, 3260], width: 300, height: 190, color: 4 });
+const cTwilioChase = sticky("### F4a · Twilio\n`Send SMS` · **disabled**\n\nThe follow-up text. **F4** already chose sms vs email per lead.", [], { name: 'c F4a', position: [1080, 3200], width: 300, height: 170, color: 4 });
+const cGmailChase = sticky("### F4b · Gmail\n`Send` · **disabled**\n\nThe email half of the same follow-up, for leads with no phone number.", [], { name: 'c F4b', position: [1440, 3200], width: 300, height: 170, color: 4 });
+const cSfLead = sticky("### G12a · Salesforce\n`Create Lead` · **disabled**\n\nPushes leads straight into the CRM instead of exporting CSV for a manual import. Same data, one less step.\n\nGoHighLevel drops in the same way.", [], { name: 'c G12a', position: [4320, 4900], width: 300, height: 230, color: 4 });
+
 export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in One (Simulated)')
-  .add(errTrig).to(errBuild).to(errWrite)
+  .add(errTrig).to(errBuild).to(slackAlert).to(errWrite)
   .add(clickIn).to(chanCfg).to(clickResolve)
     .to(clickOk.onTrue(clickRow.to(clickLog.to(clickGo))).onFalse(clickBad))
   .add(chatIn).to(botCfg).to(chatNorm).to(chatClick).to(chatContact).to(chatSession)
     .to(chatContactRow).to(chatUpsert).to(chatFaq).to(chatReply).to(chatMsgRows).to(chatLog).to(chatOut)
+  .add(chatLog).to(tgReply)
+  .add(bookCfg).to(gcalAvail)
   .add(bookForm).to(bookCfg).to(bookSlotLookup).to(bookAvail)
     .to(bookFree.onTrue(bookRow.to(bookSave.to(bookHold.to(bookPay)))).onFalse(bookTaken))
   .add(payIn).to(payLoad).to(paySlotLookup).to(payCheck)
     .to(payOk.onTrue(payRecord.to(paySave.to(payBooking.to(payUpdate.to(payBookSlot.to(payNotify.to(payNotifSave.to(payDone)))))))).onFalse(payFail))
+  .add(payRecord).to(stripeCharge)
+  .add(payUpdate).to(gcalCreate)
+  .add(payNotify).to(gmailReceipt)
+  .add(payNotify).to(twilioSms)
   .add(nurTrig).to(nurLoad).to(nurFind).to(nurBuild).to(nurLog).to(nurMark).to(nurSave)
+  .add(nurBuild).to(twilioChase)
+  .add(nurBuild).to(gmailChase)
+  .add(dashCsvBuild).to(sfLead)
   .add(dashIn).to(dashClicks).to(dashBookings).to(dashMsgs).to(dashNotifs).to(dashOps).to(dashPayments).to(dashContacts).to(dashData)
     .to(dashFormat
       .onCase(0, dashJson)
@@ -1017,4 +1132,6 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(cE1).add(cE2).add(cE2a).add(cE3).add(cE4).add(cE5).add(cE6).add(cE7).add(cE8).add(cE8a).add(cE9).add(cE10).add(cE11).add(cE12)
   .add(cF1).add(cF2).add(cF3).add(cF4).add(cF5).add(cF6).add(cF7)
   .add(cG1).add(cG2).add(cG3).add(cG4).add(cG5).add(cG6).add(cG7).add(cG8)
-  .add(cG9).add(cG10).add(cG11).add(cG12).add(cG13).add(cG14).add(cG15);
+  .add(cG9).add(cG10).add(cG11).add(cG12).add(cG13).add(cG14).add(cG15)
+  .add(cSlack).add(cTgReply).add(cGcalAvail).add(cStripe).add(cGcalCreate)
+  .add(cGmailReceipt).add(cTwilioSms).add(cTwilioChase).add(cGmailChase).add(cSfLead);

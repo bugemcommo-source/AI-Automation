@@ -72,6 +72,38 @@ best.
 Salesforce and GoHighLevel *pushes* would need real credentials; CSV pull-in
 needs none, which is why the simulation stops there.
 
+## The third-party apps are on the canvas, switched off
+
+Slack, Telegram, Google Calendar, Stripe, Gmail, Twilio and Salesforce all sit
+in the flow with their real branding and their fields already mapped. Every one
+is **disabled**.
+
+n8n skips a disabled node and passes its input straight through, so the apps
+can live in the live path without a credential, a sign-in or an outbound call —
+and the simulation still runs green end to end. Going live is: enable the node,
+add the credential. No rewiring.
+
+| App | Node | Replaces |
+| --- | --- | --- |
+| Slack | `A4 Alert` | nothing — adds failure alerts |
+| Telegram | `C12a Send Reply` | C13's JSON response |
+| Google Calendar | `D3b Availability` | D3a's `slots` lookup |
+| Stripe | `E5a Get Charge` | E5's invented payment |
+| Google Calendar | `E8b Create Event` | E8a's `slots` write |
+| Gmail | `E9a Send Receipt` | E9's pretend email |
+| Twilio | `E9b Send SMS` | E9's pretend SMS |
+| Twilio | `F4a Chase SMS` | F4's pretend chase |
+| Gmail | `F4b Chase Email` | F4's pretend chase |
+| Salesforce | `G12a Create Lead` | the CSV export |
+
+Each hangs off the same parent as the simulated node it mirrors, rather than
+sitting in series with it. That way the pairing is visible and they can be
+enabled one at a time without unplugging anything.
+
+Power BI and Looker Studio need no node at all — they read `?format=json` from
+the dashboard endpoint directly. GoHighLevel drops in exactly where Salesforce
+does.
+
 ## What is simulated
 
 - **The calendar** — a real `slots` table that `D3a` and `E2a` both read.
@@ -153,6 +185,9 @@ Every branch was run against the live instance, both sides of every `If`:
   an unknown format falls back to the page.
 - **A** — a simulated failure lands in `ops_events` with node, message and
   execution URL intact.
+- **Every branch again, with the app nodes in place** — all ten report
+  `executionTime: 0` and pass their input through untouched, and every branch
+  still produces exactly the same rows it did before they were added.
 
 ## Redundancy removed
 
