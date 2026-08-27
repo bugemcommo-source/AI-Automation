@@ -23,6 +23,25 @@ they never interfere with one another.
 | **F** Nurture sweep | hourly schedule | Chases bookings stalled over 24h, exactly once each |
 | **G** Dashboard | `GET /webhook/dashboard` | Renders one HTML page from all five tables, or exports JSON/CSV |
 
+## How the seven branches connect
+
+They don't — not on the canvas. Seven triggers means seven independent
+executions, and n8n cannot route one trigger's run into another's. Every
+branch converges instead on the **shared data tables**, and branch G reads
+them all back. The coupling is real; it just isn't drawable.
+
+```
+A ─┐
+B ─┤
+C ─┼──▶  click_events · contacts · messages · bookings         ┌──▶ HTML page
+D ─┤     payments · notifications · ops_events   ──▶ G9 ─ G10 ─┼──▶ JSON
+E ─┤                                                           └──▶ CSV
+F ─┘
+```
+
+`faq` is the eighth table — reference data the chat agent reads, never an
+output, so it is deliberately not on the dashboard.
+
 ## Dashboard exports
 
 `G9` computes every aggregate once, then `G10` routes on `?format=` so the three
@@ -38,9 +57,14 @@ For CSV, `?dataset=` picks the table — `leads` (the default), `events`,
 `funnel` or `posts`. An unrecognised `format` falls back to the page rather
 than erroring.
 
-`leads` is the default because that is what a CRM ingests: one row per person
-stalled mid-funnel, with `preferred_channel` already resolved to `sms` or
-`email` so the import maps straight onto a follow-up campaign. `events` is the
+`leads` is the default because that is what a CRM ingests. It carries a
+`lead_type` covering both ways a person goes cold:
+
+- `stalled_booking` — reached the form, never paid
+- `chatted_no_booking` — clicked and chatted, never opened the form
+
+`preferred_channel` is already resolved to `sms`, `email` or the chat platform,
+so the import maps straight onto a follow-up campaign. `events` is the
 flat fact table — one row per click, booking, message, notification and
 failure, with a `fact_type` discriminator — which is the shape BI tools model
 best.
@@ -85,6 +109,11 @@ is what everyone else is doing too.
 | `notifications` | every email and SMS "sent" |
 | `ops_events` | every failure |
 
+All seven are read back by branch G. `payments` and `contacts` were write-only
+dead ends until they were wired in — which meant revenue never appeared on the
+dashboard, and anyone who chatted but never opened the booking form was
+invisible to the follow-up list.
+
 ## Reading the canvas
 
 The canvas ships documented. A **README panel** sits above the workflow, a
@@ -116,6 +145,24 @@ Every branch was run against the live instance, both sides of every `If`:
   an unknown format falls back to the page.
 - **A** — a simulated failure lands in `ops_events` with node, message and
   execution URL intact.
+
+## Redundancy removed
+
+`D5`, `E7` and `F6` each rebuilt the identical 21-field bookings row — zero
+field differences between them. That is why the empty-string date bug had to
+be fixed in three places.
+
+`E7` and `F6` now emit only the columns they actually change and their data
+table nodes use `update` rather than `upsert`, so neither can clobber a column
+it does not own. `D5` remains the only full-row builder, because it is the
+insert. `E9` and `E11` read the booking from `E3`, the one place it is loaded.
+
+One duplication is left deliberately: `hashOf` is defined in `B3`, `D3` and
+`E3`. n8n Code nodes cannot share a library, and `D3`/`E3` must stay
+byte-identical or the post-payment race guard silently disagrees with the
+pre-payment check. The honest fix is a `slots` table both nodes read — a real
+calendar is shared state, not a shared function — which is the right change to
+make before this ever handles real money.
 
 ## Two bugs this shook out
 

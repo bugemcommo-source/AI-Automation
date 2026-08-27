@@ -456,22 +456,20 @@ const paySave = node({
 });
 const payBooking = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'E7 Build Confirmed Booking', position: [2160, 2760], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
-    jsCode: `const r = $('E3 Verify and Re-check Slot').first().json; const bk = r.booking || {};
+  config: { name: 'E7 Confirmed Booking Patch', position: [2160, 2760], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+    jsCode: `const r = $('E3 Verify and Re-check Slot').first().json;
+const bk = r.booking || {};
 return [{ json: {
-  booking_id: bk.booking_id, contact_id: bk.contact_id || '', post_id: bk.post_id || '', attribution: bk.attribution || '',
-  stage: 'confirmed', service: bk.service || '', slot_start: bk.slot_start || null, slot_end: bk.slot_end || null,
-  hold_expires_at: bk.hold_expires_at || null, full_name: bk.full_name || '', email: bk.email || '', phone: bk.phone || '',
-  currency: bk.currency || 'PHP', total_amount: Number(bk.total_amount) || 0, deposit_amount: Number(bk.deposit_amount) || 0,
-  balance_due: Number(bk.balance_due) || 0, calendar_event_id: r.calendar_event_id,
-  chase_count: Number(bk.chase_count) || 0, last_chased_at: bk.last_chased_at || null,
-  created_at: bk.created_at || new Date().toISOString(), updated_at: new Date().toISOString()
+  booking_id: bk.booking_id,
+  stage: 'confirmed',
+  calendar_event_id: r.calendar_event_id,
+  updated_at: new Date().toISOString()
 }}];` } },
-  output: [{ booking_id: 'BK-ABC', stage: 'confirmed' }]
+  output: [{ booking_id: 'BK-ABC', stage: 'confirmed', calendar_event_id: 'CAL-X', updated_at: '2026-01-01T00:00:00.000Z' }]
 });
 const payUpdate = node({
   type: 'n8n-nodes-base.dataTable', version: 1.1,
-  config: { name: 'E8 Confirm Booking', position: [2520, 2760], parameters: { resource: 'row', operation: 'upsert',
+  config: { name: 'E8 Confirm Booking', position: [2520, 2760], parameters: { resource: 'row', operation: 'update',
     dataTableId: { __rl: true, mode: 'list', value: 'ynKLNy71EOot9haS', cachedResultName: 'bookings' },
     matchType: 'allConditions',
     filters: { conditions: [{ keyName: 'booking_id', condition: 'eq', keyValue: expr('{{ $json.booking_id }}') }] },
@@ -481,14 +479,14 @@ const payUpdate = node({
 const payNotify = node({
   type: 'n8n-nodes-base.code', version: 2,
   config: { name: 'E9 Build Receipt and SMS', position: [2880, 2760], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
-    jsCode: `const bk = $('E7 Build Confirmed Booking').first().json;
+    jsCode: `const bk = ($('E3 Verify and Re-check Slot').first().json || {}).booking || {};
 const now = Date.now();
 return [
-  { json: { notification_id: 'NT' + now.toString(36) + 'e', booking_id: bk.booking_id, contact_id: bk.contact_id,
-    channel: 'email', template: 'deposit_receipt', recipient: bk.email, status: 'sent',
+  { json: { notification_id: 'NT' + now.toString(36) + 'e', booking_id: bk.booking_id, contact_id: bk.contact_id || '',
+    channel: 'email', template: 'deposit_receipt', recipient: bk.email || '', status: 'sent',
     provider_ref: 'sim_email_' + now.toString(36), error: '', sent_at: new Date(now).toISOString() } },
-  { json: { notification_id: 'NT' + now.toString(36) + 's', booking_id: bk.booking_id, contact_id: bk.contact_id,
-    channel: 'sms', template: 'booking_confirmed', recipient: bk.phone, status: 'sent',
+  { json: { notification_id: 'NT' + now.toString(36) + 's', booking_id: bk.booking_id, contact_id: bk.contact_id || '',
+    channel: 'sms', template: 'booking_confirmed', recipient: bk.phone || '', status: 'sent',
     provider_ref: 'sim_sms_' + now.toString(36), error: '', sent_at: new Date(now + 1).toISOString() } }
 ];` } },
   output: [{ notification_id: 'NT1e', channel: 'email', status: 'sent' }]
@@ -503,7 +501,7 @@ const payNotifSave = node({
 const payDone = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
   config: { name: 'E11 Confirm Page', position: [3600, 2760], parameters: { respondWith: 'text',
-    responseBody: expr("{{ 'Booking ' + $('E7 Build Confirmed Booking').first().json.booking_id + ' confirmed for ' + $('E7 Build Confirmed Booking').first().json.slot_start + '. Receipt emailed and SMS sent (simulated). Balance ' + $('E7 Build Confirmed Booking').first().json.currency + ' ' + $('E7 Build Confirmed Booking').first().json.balance_due + ' due on the day.' }}"),
+    responseBody: expr("{{ 'Booking ' + $('E3 Verify and Re-check Slot').first().json.booking.booking_id + ' confirmed for ' + $('E3 Verify and Re-check Slot').first().json.booking.slot_start + '. Receipt emailed and SMS sent (simulated). Balance ' + $('E3 Verify and Re-check Slot').first().json.booking.currency + ' ' + $('E3 Verify and Re-check Slot').first().json.booking.balance_due + ' due on the day.' }}"),
     options: { responseCode: 200 } } },
   output: [{}]
 });
@@ -566,25 +564,22 @@ const nurLog = node({
 });
 const nurMark = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'F6 Build Chased Bookings', position: [1800, 3700], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'F6 Build Chase Patch', position: [1800, 3700], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const now = new Date().toISOString();
 return $('F3 Find Stalled').all().map(function (item) {
   const bk = item.json;
   return { json: {
-    booking_id: bk.booking_id, contact_id: bk.contact_id || '', post_id: bk.post_id || '', attribution: bk.attribution || '',
-    stage: bk.stage, service: bk.service || '', slot_start: bk.slot_start || null, slot_end: bk.slot_end || null,
-    hold_expires_at: bk.hold_expires_at || null, full_name: bk.full_name || '', email: bk.email || '', phone: bk.phone || '',
-    currency: bk.currency || 'PHP', total_amount: Number(bk.total_amount) || 0, deposit_amount: Number(bk.deposit_amount) || 0,
-    balance_due: Number(bk.balance_due) || 0, calendar_event_id: bk.calendar_event_id || '',
-    chase_count: (Number(bk.chase_count) || 0) + 1, last_chased_at: now,
-    created_at: bk.created_at || now, updated_at: now
+    booking_id: bk.booking_id,
+    chase_count: (Number(bk.chase_count) || 0) + 1,
+    last_chased_at: now,
+    updated_at: now
   }};
 });` } },
-  output: [{ booking_id: 'BK-ABC', chase_count: 1 }]
+  output: [{ booking_id: 'BK-ABC', chase_count: 1, last_chased_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }]
 });
 const nurSave = node({
   type: 'n8n-nodes-base.dataTable', version: 1.1,
-  config: { name: 'F7 Mark Chased', position: [2160, 3700], parameters: { resource: 'row', operation: 'upsert',
+  config: { name: 'F7 Mark Chased', position: [2160, 3700], parameters: { resource: 'row', operation: 'update',
     dataTableId: { __rl: true, mode: 'list', value: 'ynKLNy71EOot9haS', cachedResultName: 'bookings' },
     matchType: 'allConditions',
     filters: { conditions: [{ keyName: 'booking_id', condition: 'eq', keyValue: expr('{{ $json.booking_id }}') }] },
@@ -627,15 +622,29 @@ const dashOps = node({
     dataTableId: { __rl: true, mode: 'list', value: 'RnlzXRfhSe8rRWiq', cachedResultName: 'ops_events' }, returnAll: true } },
   output: [{ event_id: 'E1', level: 'error' }]
 });
+const dashPayments = node({
+  type: 'n8n-nodes-base.dataTable', version: 1.1,
+  config: { name: 'G14 Read payments', executeOnce: true, position: [2160, 4400], alwaysOutputData: true, parameters: { resource: 'row', operation: 'get',
+    dataTableId: { __rl: true, mode: 'list', value: 'sHC4mr6HRvj84BHb', cachedResultName: 'payments' }, returnAll: true } },
+  output: [{ payment_id: 'PY-1', booking_id: 'BK-ABC', amount: 1500, currency: 'PHP', status: 'succeeded' }]
+});
+const dashContacts = node({
+  type: 'n8n-nodes-base.dataTable', version: 1.1,
+  config: { name: 'G15 Read contacts', executeOnce: true, position: [2520, 4400], alwaysOutputData: true, parameters: { resource: 'row', operation: 'get',
+    dataTableId: { __rl: true, mode: 'list', value: 'QsD7VSLQGoICmKme', cachedResultName: 'contacts' }, returnAll: true } },
+  output: [{ contact_id: 'CT-1', platform: 'telegram', display_name: 'Ana', source_post_id: 'post_001', attribution: 'exact', first_seen: '2026-01-01T00:00:00.000Z' }]
+});
 const dashData = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'G9 Build Datasets', position: [2160, 4400], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'G9 Build Datasets', position: [2880, 4400], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `function rows(n) { return $(n).all().map(function (i) { return i.json; }).filter(function (r) { return r && Object.keys(r).length > 1; }); }
 const clicks = rows('G2 Read click_events');
 const bookings = rows('G3 Read bookings');
 const msgs = rows('G4 Read messages');
 const notifs = rows('G5 Read notifications');
 const ops = rows('G6 Read ops_events');
+const payments = rows('G14 Read payments');
+const contacts = rows('G15 Read contacts');
 
 const humanClicks = clicks.filter(function (c) { return c.is_bot !== true; });
 const STAGES = ['clicked','chatted','form_opened','form_submitted','checkout_started','deposit_paid','confirmed'];
@@ -652,20 +661,37 @@ humanClicks.forEach(function (c) {
 });
 const posts = Object.keys(byPost).map(function (k) { return byPost[k]; }).sort(function (a, b) { return b.clicks - a.clicks; });
 
+const paid = payments.filter(function (p) { return p.status === 'succeeded'; });
+let revenue = 0;
+paid.forEach(function (p) { revenue += Number(p.amount) || 0; });
+
+const bookedContacts = {};
+bookings.forEach(function (b) { if (b.contact_id) { bookedContacts[b.contact_id] = true; } });
+const neverBooked = contacts.filter(function (c) { return c.contact_id && !bookedContacts[c.contact_id]; });
+
 const STALLED = ['form_opened','form_submitted','checkout_started'];
-const leads = bookings.filter(function (b) { return STALLED.indexOf(b.stage) !== -1; }).map(function (b) {
-  return { booking_id: b.booking_id || '', contact_id: b.contact_id || '', stage: b.stage || '',
-    full_name: b.full_name || '', email: b.email || '', phone: b.phone || '',
-    preferred_channel: b.phone ? 'sms' : 'email',
-    chase_count: Number(b.chase_count) || 0, last_chased_at: b.last_chased_at || '',
-    slot_start: b.slot_start || '', deposit_amount: Number(b.deposit_amount) || 0,
-    currency: b.currency || '', post_id: b.post_id || '', attribution: b.attribution || '',
-    created_at: b.created_at || '' };
+const leads = [];
+bookings.filter(function (b) { return STALLED.indexOf(b.stage) !== -1; }).forEach(function (b) {
+  leads.push({ lead_type: 'stalled_booking', contact_id: b.contact_id || '', booking_id: b.booking_id || '',
+    stage: b.stage || '', full_name: b.full_name || '', email: b.email || '', phone: b.phone || '',
+    preferred_channel: b.phone ? 'sms' : 'email', chase_count: Number(b.chase_count) || 0,
+    last_chased_at: b.last_chased_at || '', slot_start: b.slot_start || '',
+    deposit_amount: Number(b.deposit_amount) || 0, currency: b.currency || '',
+    post_id: b.post_id || '', attribution: b.attribution || '', created_at: b.created_at || '' });
+});
+neverBooked.forEach(function (c) {
+  leads.push({ lead_type: 'chatted_no_booking', contact_id: c.contact_id || '', booking_id: '',
+    stage: 'chatted', full_name: c.display_name || '', email: c.email || '', phone: c.phone || '',
+    preferred_channel: c.phone ? 'sms' : (c.email ? 'email' : (c.platform || 'chat')), chase_count: 0,
+    last_chased_at: '', slot_start: '', deposit_amount: 0, currency: '',
+    post_id: c.source_post_id || '', attribution: c.attribution || '', created_at: c.first_seen || '' });
 });
 
 const events = [];
 clicks.forEach(function (c) { events.push({ fact_type: 'click', event_id: c.click_id || '', occurred_at: c.clicked_at || '', contact_id: '', booking_id: '', post_id: c.post_id || '', channel: c.platform || '', attribution: c.attribution || '', stage: '', direction: '', status: c.is_bot ? 'bot' : 'human', template: '', amount: 0, currency: '', level: '', node_name: '', detail: '' }); });
+contacts.forEach(function (c) { events.push({ fact_type: 'contact', event_id: c.contact_id || '', occurred_at: c.first_seen || '', contact_id: c.contact_id || '', booking_id: '', post_id: c.source_post_id || '', channel: c.platform || '', attribution: c.attribution || '', stage: '', direction: '', status: bookedContacts[c.contact_id] ? 'booked' : 'no_booking', template: '', amount: 0, currency: '', level: '', node_name: '', detail: c.display_name || '' }); });
 bookings.forEach(function (b) { events.push({ fact_type: 'booking', event_id: b.booking_id || '', occurred_at: b.created_at || '', contact_id: b.contact_id || '', booking_id: b.booking_id || '', post_id: b.post_id || '', channel: '', attribution: b.attribution || '', stage: b.stage || '', direction: '', status: b.stage || '', template: '', amount: Number(b.deposit_amount) || 0, currency: b.currency || '', level: '', node_name: '', detail: b.slot_start || '' }); });
+payments.forEach(function (p) { events.push({ fact_type: 'payment', event_id: p.payment_id || '', occurred_at: p.created_at || '', contact_id: '', booking_id: p.booking_id || '', post_id: '', channel: p.provider || '', attribution: '', stage: '', direction: '', status: p.status || '', template: p.kind || '', amount: Number(p.amount) || 0, currency: p.currency || '', level: '', node_name: '', detail: p.provider_ref || '' }); });
 msgs.forEach(function (m) { events.push({ fact_type: 'message', event_id: m.message_id || '', occurred_at: m.created_at || '', contact_id: m.contact_id || '', booking_id: '', post_id: '', channel: m.channel || '', attribution: '', stage: '', direction: m.direction || '', status: '', template: '', amount: 0, currency: '', level: '', node_name: '', detail: String(m.body || '').slice(0, 200) }); });
 notifs.forEach(function (n) { events.push({ fact_type: 'notification', event_id: n.notification_id || '', occurred_at: n.sent_at || '', contact_id: n.contact_id || '', booking_id: n.booking_id || '', post_id: '', channel: n.channel || '', attribution: '', stage: '', direction: 'outbound', status: n.status || '', template: n.template || '', amount: 0, currency: '', level: '', node_name: '', detail: n.recipient || '' }); });
 ops.forEach(function (o) { events.push({ fact_type: 'ops_event', event_id: o.event_id || '', occurred_at: o.created_at || '', contact_id: '', booking_id: '', post_id: '', channel: '', attribution: '', stage: '', direction: '', status: '', template: '', amount: 0, currency: '', level: o.level || '', node_name: o.node_name || '', detail: String(o.message || '').slice(0, 300) }); });
@@ -675,9 +701,12 @@ return [{ json: {
   generated_at: new Date().toISOString(),
   kpis: {
     human_clicks: humanClicks.length, bot_clicks: clicks.length - humanClicks.length,
+    contacts_total: contacts.length, contacts_never_booked: neverBooked.length,
     messages_in: msgs.filter(function (m) { return m.direction === 'inbound'; }).length,
     messages_out: msgs.filter(function (m) { return m.direction === 'outbound'; }).length,
     bookings: bookings.length, confirmed: stageCount.confirmed,
+    payments_succeeded: paid.length, payments_failed: payments.length - paid.length,
+    revenue_collected: revenue, currency: (paid[0] && paid[0].currency) || 'PHP',
     emails_sent: notifs.filter(function (n) { return n.channel === 'email'; }).length,
     sms_sent: notifs.filter(function (n) { return n.channel === 'sms'; }).length,
     notifications_failed: notifs.filter(function (n) { return n.status !== 'sent'; }).length,
@@ -693,7 +722,7 @@ return [{ json: {
 });
 const dashFormat = switchCase({
   version: 3.4,
-  config: { name: 'G10 Which Format?', position: [2520, 4400], parameters: {
+  config: { name: 'G10 Which Format?', position: [3240, 4400], parameters: {
     mode: 'rules',
     rules: { values: [
       { conditions: { options: { caseSensitive: false, leftValue: '', typeValidation: 'loose' },
@@ -708,7 +737,7 @@ const dashFormat = switchCase({
 });
 const dashRender = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'G7 Render Dashboard', position: [2880, 4060], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'G7 Render Dashboard', position: [3600, 4060], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const d = $('G9 Build Datasets').first().json;
 const k = d.kpis;
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -717,7 +746,7 @@ function tile(label, value, sub) {
 }
 const funnelRows = d.funnel.map(function (f) { return '<tr><td>' + esc(f.stage) + '</td><td class="n">' + f.count + '</td></tr>'; }).join('');
 const postRows = d.posts.length ? d.posts.map(function (p) { return '<tr><td>' + esc(p.post_id) + '</td><td class="n">' + p.clicks + '</td><td class="n">' + p.exact_attribution + '</td></tr>'; }).join('') : '<tr><td colspan="3">No clicks yet</td></tr>';
-const leadRows = d.leads.length ? d.leads.map(function (b) { return '<tr><td>' + esc(b.booking_id) + '</td><td>' + esc(b.stage) + '</td><td>' + esc(b.full_name) + '</td><td>' + esc(b.phone || b.email) + '</td><td>' + esc(b.preferred_channel) + '</td><td class="n">' + b.chase_count + '</td></tr>'; }).join('') : '<tr><td colspan="6">Nobody stalled</td></tr>';
+const leadRows = d.leads.length ? d.leads.map(function (b) { return '<tr><td>' + esc(b.lead_type === 'stalled_booking' ? 'stalled booking' : 'chatted, no booking') + '</td><td>' + esc(b.stage) + '</td><td>' + esc(b.full_name) + '</td><td>' + esc(b.phone || b.email || b.contact_id) + '</td><td>' + esc(b.preferred_channel) + '</td><td class="n">' + b.chase_count + '</td></tr>'; }).join('') : '<tr><td colspan="6">Nobody to chase</td></tr>';
 const fails = d.events.filter(function (e) { return e.fact_type === 'ops_event'; }).slice(0, 8);
 const errRows = fails.length ? fails.map(function (o) { return '<tr><td>' + esc(o.occurred_at) + '</td><td>' + esc(o.node_name) + '</td><td>' + esc(o.detail) + '</td></tr>'; }).join('') : '<tr><td colspan="3">No failures recorded</td></tr>';
 
@@ -737,24 +766,25 @@ const css = 'body{margin:0;background:#0e1117;color:#e6e8ef;font:15px/1.55 ui-sa
 
 const html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
   + '<title>Funnel Dashboard</title><style>' + css + '</style></head><body><div class="w">'
-  + '<h1>Booking Funnel</h1><p class="sub">Simulated data · generated ' + d.generated_at + '</p>'
+  + '<h1>Booking Funnel</h1><p class="sub">Simulated data \u00b7 generated ' + d.generated_at + '</p>'
   + '<h2>Headline</h2><div class="g">'
   + tile('Human clicks', k.human_clicks, k.bot_clicks + ' bot hits excluded')
+  + tile('Contacts', k.contacts_total, k.contacts_never_booked + ' never booked')
   + tile('Conversations', k.messages_in + k.messages_out, k.messages_in + ' in / ' + k.messages_out + ' out')
   + tile('Bookings', k.bookings, k.confirmed + ' confirmed')
-  + tile('Emails sent', k.emails_sent, '')
-  + tile('SMS sent', k.sms_sent, k.notifications_failed + ' failed')
+  + tile('Collected', k.currency + ' ' + k.revenue_collected, k.payments_succeeded + ' paid / ' + k.payments_failed + ' failed')
+  + tile('Messages sent', k.emails_sent + k.sms_sent, k.emails_sent + ' email / ' + k.sms_sent + ' SMS')
   + tile('Errors', k.errors, '')
   + '</div>'
   + '<h2>Funnel</h2><table><tr><th>Stage</th><th style="text-align:right">Count</th></tr>' + funnelRows + '</table>'
   + '<h2>Post popularity</h2><table><tr><th>Post</th><th style="text-align:right">Clicks</th><th style="text-align:right">Exact attribution</th></tr>' + postRows + '</table>'
-  + '<h2>Follow-up list · ' + k.leads_to_follow_up + '</h2><table><tr><th>Booking</th><th>Stage</th><th>Name</th><th>Contact</th><th>Chase via</th><th style="text-align:right">Chased</th></tr>' + leadRows + '</table>'
+  + '<h2>Follow-up list \u00b7 ' + k.leads_to_follow_up + '</h2><table><tr><th>Type</th><th>Stage</th><th>Name</th><th>Contact</th><th>Chase via</th><th style="text-align:right">Chased</th></tr>' + leadRows + '</table>'
   + '<h2>Recent failures</h2><table><tr><th>When</th><th>Node</th><th>Message</th></tr>' + errRows + '</table>'
   + '<h2>Export</h2><div class="x">'
-  + '<a href="?format=json">JSON — all datasets</a> <span>Power BI Web connector · Looker Studio</span><br>'
-  + '<a href="?format=csv&amp;dataset=leads">CSV — leads to follow up</a> <span>Salesforce · GoHighLevel</span><br>'
-  + '<a href="?format=csv&amp;dataset=events">CSV — event facts</a> <span>one row per click, booking, message, notification, failure</span><br>'
-  + '<a href="?format=csv&amp;dataset=funnel">CSV — funnel counts</a> &nbsp; <a href="?format=csv&amp;dataset=posts">CSV — post popularity</a>'
+  + '<a href="?format=json">JSON \u2014 all datasets</a> <span>Power BI Web connector \u00b7 Looker Studio</span><br>'
+  + '<a href="?format=csv&amp;dataset=leads">CSV \u2014 leads to follow up</a> <span>Salesforce \u00b7 GoHighLevel</span><br>'
+  + '<a href="?format=csv&amp;dataset=events">CSV \u2014 event facts</a> <span>one row per click, contact, booking, payment, message, notification, failure</span><br>'
+  + '<a href="?format=csv&amp;dataset=funnel">CSV \u2014 funnel counts</a> &nbsp; <a href="?format=csv&amp;dataset=posts">CSV \u2014 post popularity</a>'
   + '</div>'
   + '</div></body></html>';
 
@@ -763,20 +793,20 @@ return [{ json: { html: html } }];` } },
 });
 const dashServe = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
-  config: { name: 'G8 Serve Page', position: [3240, 4060], parameters: { respondWith: 'text',
+  config: { name: 'G8 Serve Page', position: [3960, 4060], parameters: { respondWith: 'text',
     responseBody: expr('{{ $json.html }}'),
     options: { responseCode: 200, responseHeaders: { entries: [{ name: 'content-type', value: 'text/html; charset=utf-8' }] } } } },
   output: [{}]
 });
 const dashJson = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
-  config: { name: 'G11 Serve JSON', position: [2880, 4400], parameters: { respondWith: 'json',
+  config: { name: 'G11 Serve JSON', position: [3600, 4400], parameters: { respondWith: 'json',
     responseBody: expr('{{ $json }}'), options: { responseCode: 200 } } },
   output: [{}]
 });
 const dashCsvBuild = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'G12 Build CSV', position: [2880, 4740], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'G12 Build CSV', position: [3600, 4740], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const d = $('G9 Build Datasets').first().json;
 const q = ($('G1 Dashboard Request').first().json || {}).query || {};
 const asked = String(q.dataset || 'leads').toLowerCase();
@@ -799,7 +829,7 @@ return [{ json: { csv: csv, dataset: chosen, row_count: rows.length, filename: '
 });
 const dashCsvServe = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
-  config: { name: 'G13 Serve CSV', position: [3240, 4740], parameters: { respondWith: 'text',
+  config: { name: 'G13 Serve CSV', position: [3960, 4740], parameters: { respondWith: 'text',
     responseBody: expr('{{ $json.csv }}'),
     options: { responseCode: 200, responseHeaders: { entries: [
       { name: 'content-type', value: 'text/csv; charset=utf-8' },
@@ -817,7 +847,7 @@ const banC = sticky("## C · Chat and agent\nTrades the token for the click row 
 const banD = sticky("## D · Booking and deposit\nChecks the slot **before** taking money, holds it with an expiry, then shows a simulated payment link. A taken slot ends the form politely rather than charging for something unavailable.", [], { name: 'Band D', position: [2560, 2140], width: 760, height: 120, color: 4 });
 const banE = sticky("## E · Payment and confirmation\n**Re-checks the slot after payment** — the race that would otherwise double-book. If it was lost, the deposit is refunded rather than the customer being quietly overbooked. On success: calendar event, receipt, SMS.", [], { name: 'Band E', position: [4000, 2840], width: 780, height: 120, color: 6 });
 const banF = sticky("## F · Follow-up nurture\nHourly sweep for bookings stuck at `form_opened`, `form_submitted` or `checkout_started` for over 24 hours. Chases once, then stamps `chase_count` so nobody is pestered twice.", [], { name: 'Band F', position: [2560, 3640], width: 760, height: 120, color: 2 });
-const banG = sticky("## G · Dashboard and exports\nReads all five tables once in **G9**, then serves the same numbers three ways off one endpoint: the HTML page by default, `?format=json` for Power BI and Looker Studio, and `?format=csv&dataset=…` for Salesforce and GoHighLevel. Aggregation lives in one node so the three formats cannot drift apart.", [], { name: 'Band G', position: [3600, 4380], width: 700, height: 140, color: 6 });
+const banG = sticky("## G · Dashboard and exports — where every branch lands\nThe seven branches never touch on the canvas; they converge **here**, through the seven tables they share. G2–G6, G14 and G15 read all of them, G9 computes every aggregate once, and G10 serves the result as HTML, `?format=json` for Power BI and Looker Studio, or `?format=csv&dataset=…` for Salesforce and GoHighLevel.", [], { name: 'Band G', position: [4320, 4380], width: 700, height: 160, color: 6 });
 
 const cA1 = sticky("### A1 · Workflow Failed\n`Error Trigger`\n\n**In:** the failing execution, from n8n itself.\n**Out:** the raw error payload.", [], { name: 'c A1', position: [0, 140], width: 300, height: 190, color: 3 });
 const cA2 = sticky("### A2 · Build Ops Event\n`Code`\n\n**Does:** flattens the nested error and clips every field so a stack trace cannot break the insert.\n**Out:** 1 `ops_events` row.", [], { name: 'c A2', position: [360, 140], width: 300, height: 200, color: 5 });
@@ -857,9 +887,9 @@ const cE3 = sticky("### E3 · Verify and Re-check Slot\n`Code`\n\n**The race gua
 const cE4 = sticky("### E4 · Confirmed?\n`If`\n\nOnly a clean confirm writes money and calendar.", [], { name: 'c E4', position: [1080, 3040], width: 300, height: 170, color: 5 });
 const cE5 = sticky("### E5 · Build Payment Row\n`Code`\n\n**Out:** 1 `payments` row, provider `simulated`.", [], { name: 'c E5', position: [1440, 2480], width: 300, height: 170, color: 4 });
 const cE6 = sticky("### E6 · Record Payment\n`Data table` · insert", [], { name: 'c E6', position: [1800, 2480], width: 300, height: 160, color: 6 });
-const cE7 = sticky("### E7 · Build Confirmed Booking\n`Code`\n\nAll 21 columns, stage `confirmed`, calendar id attached.", [], { name: 'c E7', position: [2160, 2480], width: 300, height: 190, color: 4 });
-const cE8 = sticky("### E8 · Confirm Booking\n`Data table` · upsert", [], { name: 'c E8', position: [2520, 2480], width: 300, height: 160, color: 6 });
-const cE9 = sticky("### E9 · Build Receipt and SMS\n`Code`\n\n**Out:** 2 `notifications` rows.\n🔧 Swap for Gmail + Twilio.", [], { name: 'c E9', position: [2880, 2480], width: 300, height: 210, color: 4 });
+const cE7 = sticky("### E7 · Confirmed Booking Patch\n`Code`\n\n**Out:** only the 4 columns that actually change — `stage`, `calendar_event_id`, `updated_at`, keyed on `booking_id`.\n\nThe other 17 stay exactly as the form wrote them.", [], { name: 'c E7', position: [2160, 2480], width: 300, height: 190, color: 4 });
+const cE8 = sticky("### E8 · Confirm Booking\n`Data table` · **update**\n\nPartial update, not upsert — this node cannot clobber a column it does not own.", [], { name: 'c E8', position: [2520, 2480], width: 300, height: 160, color: 6 });
+const cE9 = sticky("### E9 · Build Receipt and SMS\n`Code`\n\nReads the booking from **E3**, the one place it is loaded.\n**Out:** 2 `notifications` rows.\n🔧 Swap for Gmail + Twilio.", [], { name: 'c E9', position: [2880, 2480], width: 300, height: 210, color: 4 });
 const cE10 = sticky("### E10 · Log Notifications\n`Data table` · insert\n\nFeeds the sent-message counts.", [], { name: 'c E10', position: [3240, 2480], width: 300, height: 170, color: 6 });
 const cE11 = sticky("### E11 · Confirm Page\n`Respond` 200\n\nStates deposit paid **and** balance still due.", [], { name: 'c E11', position: [3600, 2480], width: 300, height: 190, color: 6 });
 const cE12 = sticky("### E12 · Not Confirmed\n`Respond` 200\n\nNames which of the three failure modes happened.", [], { name: 'c E12', position: [1440, 3200], width: 300, height: 190, color: 3 });
@@ -868,21 +898,23 @@ const cF2 = sticky("### F2 · Load Bookings\n`Data table` · get all", [], { nam
 const cF3 = sticky("### F3 · Find Stalled\n`Code`\n\nStuck stages, older than 24h, not yet chased.\nZero matches is correct — the chain simply stops.", [], { name: 'c F3', position: [720, 3840], width: 300, height: 220, color: 5 });
 const cF4 = sticky("### F4 · Build Chase Rows\n`Code`\n\nSMS if we have a phone, otherwise email.", [], { name: 'c F4', position: [1080, 3840], width: 300, height: 190, color: 4 });
 const cF5 = sticky("### F5 · Log Chase\n`Data table` · insert", [], { name: 'c F5', position: [1440, 3840], width: 300, height: 160, color: 6 });
-const cF6 = sticky("### F6 · Build Chased Bookings\n`Code`\n\nIncrements `chase_count`.", [], { name: 'c F6', position: [1800, 3840], width: 300, height: 180, color: 4 });
-const cF7 = sticky("### F7 · Mark Chased\n`Data table` · upsert\n\nWhy nobody gets chased twice.", [], { name: 'c F7', position: [2160, 3840], width: 300, height: 180, color: 6 });
+const cF6 = sticky("### F6 · Build Chase Patch\n`Code`\n\n**Out:** `chase_count` + `last_chased_at` only, keyed on `booking_id`.", [], { name: 'c F6', position: [1800, 3840], width: 300, height: 180, color: 4 });
+const cF7 = sticky("### F7 · Mark Chased\n`Data table` · **update**\n\nWhy nobody gets chased twice.", [], { name: 'c F7', position: [2160, 3840], width: 300, height: 180, color: 6 });
 const cG1 = sticky("### G1 · Dashboard Request\n`Webhook` GET /dashboard", [], { name: 'c G1', position: [0, 4540], width: 300, height: 170, color: 7 });
 const cG2 = sticky("### G2 · click_events", [], { name: 'c G2', position: [360, 4540], width: 300, height: 150, color: 6 });
 const cG3 = sticky("### G3 · bookings", [], { name: 'c G3', position: [720, 4540], width: 300, height: 150, color: 6 });
 const cG4 = sticky("### G4 · messages", [], { name: 'c G4', position: [1080, 4540], width: 300, height: 150, color: 6 });
 const cG5 = sticky("### G5 · notifications", [], { name: 'c G5', position: [1440, 4540], width: 300, height: 150, color: 6 });
 const cG6 = sticky("### G6 · ops_events", [], { name: 'c G6', position: [1800, 4540], width: 300, height: 150, color: 6 });
-const cG7 = sticky("### G7 · Render Dashboard\n`Code`\n\nFunnel, post popularity, follow-up list, message volume, failures. Bot clicks excluded from every count.", [], { name: 'c G7', position: [2880, 3820], width: 300, height: 230, color: 5 });
-const cG8 = sticky("### G8 · Serve Page\n`Respond` 200 HTML", [], { name: 'c G8', position: [3240, 3820], width: 300, height: 170, color: 6 });
-const cG9 = sticky("### G9 · Build Datasets\n`Code`\n\n**Does:** every aggregate, computed once — KPIs, funnel, post popularity, the follow-up list, and a flat event fact table.\n**Out:** 1 item holding all five datasets.\n\nThe single source of truth for all three formats.", [], { name: 'c G9', position: [2160, 4540], width: 300, height: 250, color: 5 });
-const cG10 = sticky("### G10 · Which Format?\n`Switch` · reads `?format=`\n\n**json** → G11\n**csv** → G12\n**anything else** → the HTML page\n\nUnknown values fall back to the page rather than erroring.", [], { name: 'c G10', position: [2520, 4540], width: 300, height: 230, color: 5 });
-const cG11 = sticky("### G11 · Serve JSON\n`Respond` 200 JSON\n\nAll five datasets in one object. Power BI's **Web** connector expands each list into its own table from this single URL.", [], { name: 'c G11', position: [2880, 4540], width: 300, height: 190, color: 6 });
-const cG12 = sticky("### G12 · Build CSV\n`Code` · reads `?dataset=`\n\n`leads` (default) · `events` · `funnel` · `posts`\n\n**Does:** RFC-4180 quoting — commas, quotes and newlines inside a field cannot break the file.", [], { name: 'c G12', position: [2880, 4900], width: 300, height: 230, color: 5 });
-const cG13 = sticky("### G13 · Serve CSV\n`Respond` 200 text/csv\n\nSends `content-disposition: attachment`, so a browser downloads it and a CRM importer accepts it.", [], { name: 'c G13', position: [3240, 4900], width: 300, height: 190, color: 6 });
+const cG7 = sticky("### G7 · Render Dashboard\n`Code`\n\nFunnel, post popularity, follow-up list, message volume, failures. Bot clicks excluded from every count.", [], { name: 'c G7', position: [3600, 3820], width: 300, height: 230, color: 5 });
+const cG8 = sticky("### G8 · Serve Page\n`Respond` 200 HTML", [], { name: 'c G8', position: [3960, 3820], width: 300, height: 170, color: 6 });
+const cG9 = sticky("### G9 · Build Datasets\n`Code`\n\n**Does:** every aggregate, computed once — KPIs, funnel, post popularity, the follow-up list, and a flat event fact table.\n**Out:** 1 item holding all five datasets.\n\nThe single source of truth for all three formats.", [], { name: 'c G9', position: [2880, 4540], width: 300, height: 250, color: 5 });
+const cG10 = sticky("### G10 · Which Format?\n`Switch` · reads `?format=`\n\n**json** → G11\n**csv** → G12\n**anything else** → the HTML page\n\nUnknown values fall back to the page rather than erroring.", [], { name: 'c G10', position: [3240, 4540], width: 300, height: 230, color: 5 });
+const cG11 = sticky("### G11 · Serve JSON\n`Respond` 200 JSON\n\nAll five datasets in one object. Power BI's **Web** connector expands each list into its own table from this single URL.", [], { name: 'c G11', position: [3600, 4540], width: 300, height: 190, color: 6 });
+const cG12 = sticky("### G12 · Build CSV\n`Code` · reads `?dataset=`\n\n`leads` (default) · `events` · `funnel` · `posts`\n\n**Does:** RFC-4180 quoting — commas, quotes and newlines inside a field cannot break the file.", [], { name: 'c G12', position: [3600, 4900], width: 300, height: 230, color: 5 });
+const cG13 = sticky("### G13 · Serve CSV\n`Respond` 200 text/csv\n\nSends `content-disposition: attachment`, so a browser downloads it and a CRM importer accepts it.", [], { name: 'c G13', position: [3960, 4900], width: 300, height: 190, color: 6 });
+const cG14 = sticky("### G14 · payments\n`Data table` · get all\n\nWas write-only until now — money was recorded and never reported.", [], { name: 'c G14', position: [2160, 4540], width: 300, height: 190, color: 6 });
+const cG15 = sticky("### G15 · contacts\n`Data table` · get all\n\nWhere the **chatted but never booked** leads come from. Without this the follow-up list only saw people who reached the form.", [], { name: 'c G15', position: [2520, 4540], width: 300, height: 210, color: 6 });
 
 export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in One (Simulated)')
   .add(errTrig).to(errBuild).to(errWrite)
@@ -895,7 +927,7 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(payIn).to(payLoad).to(payCheck)
     .to(payOk.onTrue(payRecord.to(paySave.to(payBooking.to(payUpdate.to(payNotify.to(payNotifSave.to(payDone))))))).onFalse(payFail))
   .add(nurTrig).to(nurLoad).to(nurFind).to(nurBuild).to(nurLog).to(nurMark).to(nurSave)
-  .add(dashIn).to(dashClicks).to(dashBookings).to(dashMsgs).to(dashNotifs).to(dashOps).to(dashData)
+  .add(dashIn).to(dashClicks).to(dashBookings).to(dashMsgs).to(dashNotifs).to(dashOps).to(dashPayments).to(dashContacts).to(dashData)
     .to(dashFormat
       .onCase(0, dashJson)
       .onCase(1, dashCsvBuild.to(dashCsvServe))
@@ -908,4 +940,4 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(cE1).add(cE2).add(cE3).add(cE4).add(cE5).add(cE6).add(cE7).add(cE8).add(cE9).add(cE10).add(cE11).add(cE12)
   .add(cF1).add(cF2).add(cF3).add(cF4).add(cF5).add(cF6).add(cF7)
   .add(cG1).add(cG2).add(cG3).add(cG4).add(cG5).add(cG6).add(cG7).add(cG8)
-  .add(cG9).add(cG10).add(cG11).add(cG12).add(cG13);
+  .add(cG9).add(cG10).add(cG11).add(cG12).add(cG13).add(cG14).add(cG15);
