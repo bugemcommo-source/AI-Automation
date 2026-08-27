@@ -164,6 +164,7 @@ is what everyone else is doing too.
 | `payments` | deposits, simulated |
 | `notifications` | every email and SMS "sent" |
 | `slots` | the calendar — one row per taken slot, `held` or `booked` |
+| `social_post_log` | the publish record — one row per post **per platform** |
 | `ops_events` | every failure |
 
 All seven are read back by branch G. `payments` and `contacts` were write-only
@@ -214,6 +215,36 @@ Every branch was run against the live instance, both sides of every `If`:
 - **The loop closes** — branch H published `post_005` with nine tracked links,
   and branch B logged a click on that exact post with an exact-attribution
   token. Publish and click are now two ends of one measurable path.
+
+## The publish record
+
+`H2b Log Post` writes one row per post **per platform** into `social_post_log`:
+
+| Column | Holds |
+| --- | --- |
+| `post_id`, `platform`, `posted_at` | what went where, when |
+| `text_sent`, `char_count`, `char_limit`, `truncated` | the exact caption sent, measured against that platform's limit |
+| `link` | the tracked link that post carries |
+| `status`, `remote_ref`, `error` | delivery outcome |
+
+`H2` applies each platform's real character limit — X 280, Discord 2000,
+Instagram and TikTok 2200, LinkedIn 3000, WhatsApp and Telegram 4096 — and
+truncates the caption to fit **while preserving the link intact**, flagging
+`truncated`. Verified: a 389-character caption comes out at exactly 280 for X
+with the link whole, and untouched on Facebook.
+
+The dashboard's `posts` dataset is now **led by the publish log with clicks
+left-joined onto it**, not a group-by over clicks. Before this, a post nobody
+clicked did not exist in any output. Now every published post appears with its
+caption, platform count, publish date, truncation count and click total —
+including the zeroes, which are the ones worth knowing about. A post that has
+clicks but no publish row shows as `(not in publish log)` rather than being
+silently merged away.
+
+One honest limitation: the log is written **before** the platform nodes, so it
+records intent (`status: simulated`) rather than outcome. That is correct while
+the platforms are disabled. Enabling a real platform means moving this node
+downstream of it to capture the actual `remote_ref` — noted on the node card.
 
 ## Redundancy removed
 

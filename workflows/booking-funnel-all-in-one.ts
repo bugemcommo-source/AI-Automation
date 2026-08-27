@@ -709,7 +709,7 @@ const dashContacts = node({
 });
 const dashData = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'G9 Build Datasets', position: [3200, 7000], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'G9 Build Datasets', position: [3600, 7000], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `function rows(n) { return $(n).all().map(function (i) { return i.json; }).filter(function (r) { return r && Object.keys(r).length > 1; }); }
 const clicks = rows('G2 Read click_events');
 const bookings = rows('G3 Read bookings');
@@ -718,6 +718,7 @@ const notifs = rows('G5 Read notifications');
 const ops = rows('G6 Read ops_events');
 const payments = rows('G14 Read payments');
 const contacts = rows('G15 Read contacts');
+const publishes = rows('G16 Read social_post_log');
 
 const humanClicks = clicks.filter(function (c) { return c.is_bot !== true; });
 const STAGES = ['clicked','chatted','form_opened','form_submitted','checkout_started','deposit_paid','confirmed'];
@@ -725,14 +726,37 @@ const stageCount = {};
 STAGES.forEach(function (s) { stageCount[s] = 0; });
 bookings.forEach(function (b) { if (stageCount[b.stage] !== undefined) { stageCount[b.stage] += 1; } });
 
-const byPost = {};
+// clicks indexed by post
+const clickBy = {};
 humanClicks.forEach(function (c) {
   const k = c.post_id || 'unknown';
-  if (!byPost[k]) { byPost[k] = { post_id: k, clicks: 0, exact_attribution: 0 }; }
-  byPost[k].clicks += 1;
-  if (c.attribution === 'exact') { byPost[k].exact_attribution += 1; }
+  if (!clickBy[k]) { clickBy[k] = { clicks: 0, exact: 0 }; }
+  clickBy[k].clicks += 1;
+  if (c.attribution === 'exact') { clickBy[k].exact += 1; }
 });
-const posts = Object.keys(byPost).map(function (k) { return byPost[k]; }).sort(function (a, b) { return b.clicks - a.clicks; });
+
+// posts led by the publish log, clicks joined on
+const postBy = {};
+publishes.forEach(function (p) {
+  const k = p.post_id || 'unknown';
+  if (!postBy[k]) { postBy[k] = { post_id: k, caption: '', platforms: [], platform_count: 0, published_at: '', truncated_count: 0, clicks: 0, exact_attribution: 0 }; }
+  const e = postBy[k];
+  if (!e.caption) { e.caption = String(p.text_sent || '').split('\\n')[0].slice(0, 120); }
+  if (p.platform && e.platforms.indexOf(p.platform) === -1) { e.platforms.push(p.platform); }
+  if (p.truncated === true) { e.truncated_count += 1; }
+  if (!e.published_at || String(p.posted_at) < e.published_at) { e.published_at = String(p.posted_at || ''); }
+});
+// clicks on posts that were never logged as published still deserve a row
+Object.keys(clickBy).forEach(function (k) {
+  if (!postBy[k]) { postBy[k] = { post_id: k, caption: '(not in publish log)', platforms: [], platform_count: 0, published_at: '', truncated_count: 0, clicks: 0, exact_attribution: 0 }; }
+});
+Object.keys(postBy).forEach(function (k) {
+  const e = postBy[k];
+  e.platform_count = e.platforms.length;
+  e.platforms = e.platforms.join(' ');
+  if (clickBy[k]) { e.clicks = clickBy[k].clicks; e.exact_attribution = clickBy[k].exact; }
+});
+const posts = Object.keys(postBy).map(function (k) { return postBy[k]; }).sort(function (a, b) { return b.clicks - a.clicks; });
 
 const paid = payments.filter(function (p) { return p.status === 'succeeded'; });
 let revenue = 0;
@@ -761,6 +785,7 @@ neverBooked.forEach(function (c) {
 });
 
 const events = [];
+publishes.forEach(function (p) { events.push({ fact_type: 'publish', event_id: (p.post_id || '') + ':' + (p.platform || ''), occurred_at: p.posted_at || '', contact_id: '', booking_id: '', post_id: p.post_id || '', channel: p.platform || '', attribution: '', stage: '', direction: 'outbound', status: p.status || '', template: p.truncated === true ? 'truncated' : '', amount: Number(p.char_count) || 0, currency: '', level: '', node_name: '', detail: String(p.text_sent || '').slice(0, 200) }); });
 clicks.forEach(function (c) { events.push({ fact_type: 'click', event_id: c.click_id || '', occurred_at: c.clicked_at || '', contact_id: '', booking_id: '', post_id: c.post_id || '', channel: c.platform || '', attribution: c.attribution || '', stage: '', direction: '', status: c.is_bot ? 'bot' : 'human', template: '', amount: 0, currency: '', level: '', node_name: '', detail: '' }); });
 contacts.forEach(function (c) { events.push({ fact_type: 'contact', event_id: c.contact_id || '', occurred_at: c.first_seen || '', contact_id: c.contact_id || '', booking_id: '', post_id: c.source_post_id || '', channel: c.platform || '', attribution: c.attribution || '', stage: '', direction: '', status: bookedContacts[c.contact_id] ? 'booked' : 'no_booking', template: '', amount: 0, currency: '', level: '', node_name: '', detail: c.display_name || '' }); });
 bookings.forEach(function (b) { events.push({ fact_type: 'booking', event_id: b.booking_id || '', occurred_at: b.created_at || '', contact_id: b.contact_id || '', booking_id: b.booking_id || '', post_id: b.post_id || '', channel: '', attribution: b.attribution || '', stage: b.stage || '', direction: '', status: b.stage || '', template: '', amount: Number(b.deposit_amount) || 0, currency: b.currency || '', level: '', node_name: '', detail: b.slot_start || '' }); });
@@ -770,9 +795,13 @@ notifs.forEach(function (n) { events.push({ fact_type: 'notification', event_id:
 ops.forEach(function (o) { events.push({ fact_type: 'ops_event', event_id: o.event_id || '', occurred_at: o.created_at || '', contact_id: '', booking_id: '', post_id: '', channel: '', attribution: '', stage: '', direction: '', status: '', template: '', amount: 0, currency: '', level: o.level || '', node_name: o.node_name || '', detail: String(o.message || '').slice(0, 300) }); });
 events.sort(function (a, b) { return String(a.occurred_at) < String(b.occurred_at) ? 1 : -1; });
 
+const distinctPosts = {};
+publishes.forEach(function (p) { if (p.post_id) { distinctPosts[p.post_id] = true; } });
+
 return [{ json: {
   generated_at: new Date().toISOString(),
   kpis: {
+    posts_published: Object.keys(distinctPosts).length, platform_publishes: publishes.length,
     human_clicks: humanClicks.length, bot_clicks: clicks.length - humanClicks.length,
     contacts_total: contacts.length, contacts_never_booked: neverBooked.length,
     messages_in: msgs.filter(function (m) { return m.direction === 'inbound'; }).length,
@@ -795,7 +824,7 @@ return [{ json: {
 });
 const dashFormat = switchCase({
   version: 3.4,
-  config: { name: 'G10 Which Format?', position: [3600, 7000], parameters: {
+  config: { name: 'G10 Which Format?', position: [4000, 7000], parameters: {
     mode: 'rules',
     rules: { values: [
       { conditions: { options: { caseSensitive: false, leftValue: '', typeValidation: 'loose' },
@@ -810,7 +839,7 @@ const dashFormat = switchCase({
 });
 const dashRender = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'G7 Render Dashboard', position: [4000, 6650], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'G7 Render Dashboard', position: [4400, 6650], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const d = $('G9 Build Datasets').first().json;
 const k = d.kpis;
 function esc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
@@ -818,7 +847,9 @@ function tile(label, value, sub) {
   return '<div class="t"><div class="v">' + esc(value) + '</div><div class="k">' + esc(label) + '</div>' + (sub ? '<div class="s">' + esc(sub) + '</div>' : '') + '</div>';
 }
 const funnelRows = d.funnel.map(function (f) { return '<tr><td>' + esc(f.stage) + '</td><td class="n">' + f.count + '</td></tr>'; }).join('');
-const postRows = d.posts.length ? d.posts.map(function (p) { return '<tr><td>' + esc(p.post_id) + '</td><td class="n">' + p.clicks + '</td><td class="n">' + p.exact_attribution + '</td></tr>'; }).join('') : '<tr><td colspan="3">No clicks yet</td></tr>';
+const postRows = d.posts.length ? d.posts.map(function (p) {
+  return '<tr><td>' + esc(p.post_id) + '</td><td class="c">' + esc(p.caption) + '</td><td>' + esc(String(p.published_at).slice(0,10)) + '</td><td class="n">' + p.platform_count + '</td><td class="n">' + p.clicks + '</td><td class="n">' + p.exact_attribution + '</td><td class="n">' + p.truncated_count + '</td></tr>';
+}).join('') : '<tr><td colspan="7">Nothing published yet</td></tr>';
 const leadRows = d.leads.length ? d.leads.map(function (b) { return '<tr><td>' + esc(b.lead_type === 'stalled_booking' ? 'stalled booking' : 'chatted, no booking') + '</td><td>' + esc(b.stage) + '</td><td>' + esc(b.full_name) + '</td><td>' + esc(b.phone || b.email || b.contact_id) + '</td><td>' + esc(b.preferred_channel) + '</td><td class="n">' + b.chase_count + '</td></tr>'; }).join('') : '<tr><td colspan="6">Nobody to chase</td></tr>';
 const fails = d.events.filter(function (e) { return e.fact_type === 'ops_event'; }).slice(0, 8);
 const errRows = fails.length ? fails.map(function (o) { return '<tr><td>' + esc(o.occurred_at) + '</td><td>' + esc(o.node_name) + '</td><td>' + esc(o.detail) + '</td></tr>'; }).join('') : '<tr><td colspan="3">No failures recorded</td></tr>';
@@ -834,13 +865,15 @@ const css = 'body{margin:0;background:#0e1117;color:#e6e8ef;font:15px/1.55 ui-sa
   + 'th{text-align:left;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:#8b93a8;padding:10px 14px;border-bottom:1px solid #252a38}'
   + 'td{padding:10px 14px;border-bottom:1px solid #1d2230}tr:last-child td{border-bottom:0}'
   + 'td.n{text-align:right;font-variant-numeric:tabular-nums}'
+  + 'td.c{color:#8b93a8;max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
   + '.x{background:#161a24;border:1px solid #252a38;border-radius:5px;padding:14px 18px;font-size:14px;line-height:2.1}'
   + '.x a{color:#8e9bf0;text-decoration:none;border-bottom:1px solid #3a4260}.x span{color:#6c7488;font-size:13px}';
 
 const html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
   + '<title>Funnel Dashboard</title><style>' + css + '</style></head><body><div class="w">'
-  + '<h1>Booking Funnel</h1><p class="sub">Simulated data \u00b7 generated ' + d.generated_at + '</p>'
+  + '<h1>Booking Funnel</h1><p class="sub">Simulated data · generated ' + d.generated_at + '</p>'
   + '<h2>Headline</h2><div class="g">'
+  + tile('Posts published', k.posts_published, k.platform_publishes + ' platform publishes')
   + tile('Human clicks', k.human_clicks, k.bot_clicks + ' bot hits excluded')
   + tile('Contacts', k.contacts_total, k.contacts_never_booked + ' never booked')
   + tile('Conversations', k.messages_in + k.messages_out, k.messages_in + ' in / ' + k.messages_out + ' out')
@@ -849,15 +882,16 @@ const html = '<!doctype html><html><head><meta charset="utf-8"><meta name="viewp
   + tile('Messages sent', k.emails_sent + k.sms_sent, k.emails_sent + ' email / ' + k.sms_sent + ' SMS')
   + tile('Errors', k.errors, '')
   + '</div>'
+  + '<h2>Published posts · ' + d.posts.length + '</h2><table><tr><th>Post</th><th>Caption</th><th>Published</th><th style="text-align:right">Platforms</th><th style="text-align:right">Clicks</th><th style="text-align:right">Exact</th><th style="text-align:right">Truncated</th></tr>' + postRows + '</table>'
   + '<h2>Funnel</h2><table><tr><th>Stage</th><th style="text-align:right">Count</th></tr>' + funnelRows + '</table>'
-  + '<h2>Post popularity</h2><table><tr><th>Post</th><th style="text-align:right">Clicks</th><th style="text-align:right">Exact attribution</th></tr>' + postRows + '</table>'
-  + '<h2>Follow-up list \u00b7 ' + k.leads_to_follow_up + '</h2><table><tr><th>Type</th><th>Stage</th><th>Name</th><th>Contact</th><th>Chase via</th><th style="text-align:right">Chased</th></tr>' + leadRows + '</table>'
+  + '<h2>Follow-up list · ' + k.leads_to_follow_up + '</h2><table><tr><th>Type</th><th>Stage</th><th>Name</th><th>Contact</th><th>Chase via</th><th style="text-align:right">Chased</th></tr>' + leadRows + '</table>'
   + '<h2>Recent failures</h2><table><tr><th>When</th><th>Node</th><th>Message</th></tr>' + errRows + '</table>'
   + '<h2>Export</h2><div class="x">'
-  + '<a href="?format=json">JSON \u2014 all datasets</a> <span>Power BI Web connector \u00b7 Looker Studio</span><br>'
-  + '<a href="?format=csv&amp;dataset=leads">CSV \u2014 leads to follow up</a> <span>Salesforce \u00b7 GoHighLevel</span><br>'
-  + '<a href="?format=csv&amp;dataset=events">CSV \u2014 event facts</a> <span>one row per click, contact, booking, payment, message, notification, failure</span><br>'
-  + '<a href="?format=csv&amp;dataset=funnel">CSV \u2014 funnel counts</a> &nbsp; <a href="?format=csv&amp;dataset=posts">CSV \u2014 post popularity</a>'
+  + '<a href="?format=json">JSON — all datasets</a> <span>Power BI Web connector · Looker Studio</span><br>'
+  + '<a href="?format=csv&amp;dataset=leads">CSV — leads to follow up</a> <span>Salesforce · GoHighLevel</span><br>'
+  + '<a href="?format=csv&amp;dataset=posts">CSV — the publish record</a> <span>what went out, where, and how it performed</span><br>'
+  + '<a href="?format=csv&amp;dataset=events">CSV — event facts</a> <span>one row per publish, click, contact, booking, payment, message, notification, failure</span><br>'
+  + '<a href="?format=csv&amp;dataset=funnel">CSV — funnel counts</a>'
   + '</div>'
   + '</div></body></html>';
 
@@ -866,20 +900,20 @@ return [{ json: { html: html } }];` } },
 });
 const dashServe = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
-  config: { name: 'G8 Serve Page', position: [4400, 6650], parameters: { respondWith: 'text',
+  config: { name: 'G8 Serve Page', position: [4800, 6650], parameters: { respondWith: 'text',
     responseBody: expr('{{ $json.html }}'),
     options: { responseCode: 200, responseHeaders: { entries: [{ name: 'content-type', value: 'text/html; charset=utf-8' }] } } } },
   output: [{}]
 });
 const dashJson = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
-  config: { name: 'G11 Serve JSON', position: [4000, 7000], parameters: { respondWith: 'json',
+  config: { name: 'G11 Serve JSON', position: [4400, 7000], parameters: { respondWith: 'json',
     responseBody: expr('{{ $json }}'), options: { responseCode: 200 } } },
   output: [{}]
 });
 const dashCsvBuild = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'G12 Build CSV', position: [4000, 7500], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'G12 Build CSV', position: [4400, 7500], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const d = $('G9 Build Datasets').first().json;
 const q = ($('G1 Dashboard Request').first().json || {}).query || {};
 const asked = String(q.dataset || 'leads').toLowerCase();
@@ -902,7 +936,7 @@ return [{ json: { csv: csv, dataset: chosen, row_count: rows.length, filename: '
 });
 const dashCsvServe = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
-  config: { name: 'G13 Serve CSV', position: [4400, 7500], parameters: { respondWith: 'text',
+  config: { name: 'G13 Serve CSV', position: [4800, 7500], parameters: { respondWith: 'text',
     responseBody: expr('{{ $json.csv }}'),
     options: { responseCode: 200, responseHeaders: { entries: [
       { name: 'content-type', value: 'text/csv; charset=utf-8' },
@@ -998,7 +1032,7 @@ const gmailChase = node({
 });
 const sfLead = node({
   type: 'n8n-nodes-base.salesforce', version: 1.1,
-  config: { name: 'G12a Salesforce — Create Lead', position: [4800, 7100], disabled: true, parameters: { resource: 'lead', operation: 'create',
+  config: { name: 'G12a Salesforce — Create Lead', position: [5200, 7100], disabled: true, parameters: { resource: 'lead', operation: 'create',
     authentication: 'oAuth2',
     company: expr('{{ $json.dataset }}'), lastname: expr('{{ $json.dataset }}'),
     additionalFields: { leadSource: 'n8n Booking Funnel',
@@ -1008,7 +1042,7 @@ const sfLead = node({
 
 const ghlUpsert = node({
   type: 'n8n-nodes-base.httpRequest', version: 4.2,
-  config: { name: 'G12b GoHighLevel — Upsert Contact', position: [4800, 7300], disabled: true, parameters: {
+  config: { name: 'G12b GoHighLevel — Upsert Contact', position: [5200, 7300], disabled: true, parameters: {
     method: 'POST', url: 'https://services.leadconnectorhq.com/contacts/upsert',
     sendHeaders: true, headerParameters: { parameters: [{ name: 'Version', value: '2021-07-28' }] },
     sendBody: true, specifyBody: 'json',
@@ -1018,19 +1052,19 @@ const ghlUpsert = node({
 });
 const hubspotUpsert = node({
   type: 'n8n-nodes-base.hubspot', version: 2.2,
-  config: { name: 'G12c HubSpot — Upsert Contact', position: [4800, 7500], disabled: true, parameters: {
+  config: { name: 'G12c HubSpot — Upsert Contact', position: [5200, 7500], disabled: true, parameters: {
     resource: 'contact', operation: 'upsert', email: expr('{{ $json.dataset }}'), additionalFields: {} } },
   output: [{}]
 });
 const pipedriveLead = node({
   type: 'n8n-nodes-base.pipedrive', version: 2,
-  config: { name: 'G12d Pipedrive — Create Lead', position: [4800, 7700], disabled: true, parameters: {
+  config: { name: 'G12d Pipedrive — Create Lead', position: [5200, 7700], disabled: true, parameters: {
     resource: 'lead', operation: 'create', title: expr("{{ 'Funnel export — ' + $json.dataset }}"), additionalFields: {} } },
   output: [{}]
 });
 const sheetsAppend = node({
   type: 'n8n-nodes-base.googleSheets', version: 4.7,
-  config: { name: 'G12e Google Sheets — Append', position: [4800, 7900], disabled: true, parameters: {
+  config: { name: 'G12e Google Sheets — Append', position: [5200, 7900], disabled: true, parameters: {
     resource: 'sheet', operation: 'append',
     documentId: { __rl: true, mode: 'url', value: 'https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID' },
     sheetName: { __rl: true, mode: 'name', value: 'leads' },
@@ -1039,7 +1073,7 @@ const sheetsAppend = node({
 });
 const pgInsert = node({
   type: 'n8n-nodes-base.postgres', version: 2.7,
-  config: { name: 'G12f Postgres — Insert', position: [5200, 7100], disabled: true, parameters: {
+  config: { name: 'G12f Postgres — Insert', position: [5600, 7100], disabled: true, parameters: {
     operation: 'executeQuery',
     query: 'INSERT INTO funnel_events (dataset, row_count, exported_at) VALUES ($1, $2, NOW());',
     options: { queryReplacement: expr('{{ $json.dataset }}, {{ $json.row_count }}') } } },
@@ -1047,7 +1081,7 @@ const pgInsert = node({
 });
 const mysqlInsert = node({
   type: 'n8n-nodes-base.mySql', version: 2.5,
-  config: { name: 'G12g MySQL — Insert', position: [5200, 7300], disabled: true, parameters: {
+  config: { name: 'G12g MySQL — Insert', position: [5600, 7300], disabled: true, parameters: {
     operation: 'executeQuery',
     query: 'INSERT INTO funnel_events (dataset, row_count, exported_at) VALUES (?, ?, NOW());',
     options: { queryReplacement: expr('{{ $json.dataset }}, {{ $json.row_count }}') } } },
@@ -1055,14 +1089,14 @@ const mysqlInsert = node({
 });
 const mongoInsert = node({
   type: 'n8n-nodes-base.mongoDb', version: 1.4,
-  config: { name: 'G12h MongoDB — Insert', position: [5200, 7500], disabled: true, parameters: {
+  config: { name: 'G12h MongoDB — Insert', position: [5600, 7500], disabled: true, parameters: {
     resource: 'document', operation: 'insert', collection: 'funnel_events',
     fields: 'dataset,row_count,filename', options: {} } },
   output: [{}]
 });
 const airtableCreate = node({
   type: 'n8n-nodes-base.airtable', version: 2.2,
-  config: { name: 'G12i Airtable — Create Record', position: [5200, 7700], disabled: true, parameters: {
+  config: { name: 'G12i Airtable — Create Record', position: [5600, 7700], disabled: true, parameters: {
     resource: 'record', operation: 'create',
     base: { __rl: true, mode: 'id', value: 'appYOURBASEID' },
     table: expr("{{ 'Funnel Events' }}"),
@@ -1071,7 +1105,7 @@ const airtableCreate = node({
 });
 const supabaseCreate = node({
   type: 'n8n-nodes-base.supabase', version: 1,
-  config: { name: 'G12j Supabase — Create Row', position: [5200, 7900], disabled: true, parameters: {
+  config: { name: 'G12j Supabase — Create Row', position: [5600, 7900], disabled: true, parameters: {
     resource: 'row', operation: 'create', tableId: expr("{{ 'funnel_events' }}"), dataToSend: 'autoMapInputData' } },
   output: [{}]
 });
@@ -1095,19 +1129,59 @@ const postLinks = node({
 const postId = String(f['Post ID'] || 'post_001').trim();
 const caption = String(f.Caption || '').trim();
 const BASE = 'https://gipre.app.n8n.cloud/webhook/go';
+const LIMIT = { facebook: 63206, instagram: 2200, x: 280, linkedin: 3000, whatsapp: 4096, discord: 2000, reddit: 40000, telegram: 4096, tiktok: 2200 };
 const PLATFORMS = ['facebook','instagram','x','linkedin','whatsapp','discord','reddit','telegram','tiktok'];
-const links = {};
-PLATFORMS.forEach(function (p) { links[p] = BASE + '?p=' + encodeURIComponent(postId) + '&c=' + p; });
+const now = new Date().toISOString();
 const out = [];
 PLATFORMS.forEach(function (p) {
+  const link = BASE + '?p=' + encodeURIComponent(postId) + '&c=' + p;
+  const full = caption + '\\n\\n' + link;
+  const limit = LIMIT[p] || 2000;
+  let body = full;
+  let truncated = false;
+  if (full.length > limit) {
+    const room = limit - link.length - 4;
+    body = (room > 0 ? caption.slice(0, room) + '... ' : '') + link;
+    truncated = true;
+  }
   out.push({ json: {
-    post_id: postId, platform: p, tracked_link: links[p],
-    body: caption + '\\n\\n' + links[p],
-    caption: caption, created_at: new Date().toISOString()
+    post_id: postId, platform: p, tracked_link: link, body: body, caption: caption,
+    char_count: body.length, char_limit: limit, truncated: truncated, created_at: now
   }});
 });
 return out;` } },
   output: [{ post_id: 'post_005', platform: 'facebook', tracked_link: 'https://gipre.app.n8n.cloud/webhook/go?p=post_005&c=facebook', body: 'caption + link', caption: 'caption', created_at: '2026-01-01T00:00:00.000Z' }]
+});
+const postLogRow = node({
+  type: 'n8n-nodes-base.set', version: 3.5,
+  config: { name: 'H2a Shape Log Row', position: [1000, -1100], parameters: { mode: 'manual', includeOtherFields: false,
+    assignments: { assignments: [
+      { id: 'p1', name: 'post_id', value: expr('{{ $json.post_id }}'), type: 'string' },
+      { id: 'p2', name: 'posted_at', value: expr('{{ $json.created_at }}'), type: 'string' },
+      { id: 'p3', name: 'platform', value: expr('{{ $json.platform }}'), type: 'string' },
+      { id: 'p4', name: 'status', value: 'simulated', type: 'string' },
+      { id: 'p5', name: 'text_sent', value: expr('{{ $json.body }}'), type: 'string' },
+      { id: 'p6', name: 'char_count', value: expr('{{ $json.char_count }}'), type: 'number' },
+      { id: 'p7', name: 'char_limit', value: expr('{{ $json.char_limit }}'), type: 'number' },
+      { id: 'p8', name: 'truncated', value: expr('{{ $json.truncated }}'), type: 'boolean' },
+      { id: 'p9', name: 'link', value: expr('{{ $json.tracked_link }}'), type: 'string' },
+      { id: 'p10', name: 'remote_ref', value: '', type: 'string' },
+      { id: 'p11', name: 'error', value: '', type: 'string' }
+    ] } } },
+  output: [{ post_id: 'post_007', platform: 'x', status: 'simulated', char_count: 280, char_limit: 280, truncated: true }]
+});
+const postLogWrite = node({
+  type: 'n8n-nodes-base.dataTable', version: 1.1,
+  config: { name: 'H2b Log Post', position: [1400, -1100], onError: 'continueRegularOutput', parameters: { resource: 'row', operation: 'insert',
+    dataTableId: { __rl: true, mode: 'list', value: 'si7SiekpdNY6mYOr', cachedResultName: 'social_post_log' },
+    columns: { mappingMode: 'autoMapInputData', value: null, matchingColumns: [] } } },
+  output: [{ id: 1 }]
+});
+const dashPostLog = node({
+  type: 'n8n-nodes-base.dataTable', version: 1.1,
+  config: { name: 'G16 Read social_post_log', executeOnce: true, position: [3200, 7000], alwaysOutputData: true, parameters: { resource: 'row', operation: 'get',
+    dataTableId: { __rl: true, mode: 'list', value: 'si7SiekpdNY6mYOr', cachedResultName: 'social_post_log' }, returnAll: true } },
+  output: [{ post_id: 'post_007', platform: 'x', status: 'simulated', posted_at: '2026-01-01T00:00:00.000Z', truncated: true, char_count: 280 }]
 });
 const fbPublish = node({
   type: 'n8n-nodes-base.facebookGraphApi', version: 1,
@@ -1189,7 +1263,7 @@ const banC = sticky("## C · Chat and agent\nTrades the token for the click row 
 const banD = sticky("## D · Booking and deposit\nChecks the slot **before** taking money, holds it with an expiry, then shows a simulated payment link. A taken slot ends the form politely rather than charging for something unavailable.", [], { name: 'Band D', position: [3700, 3840], width: 760, height: 120, color: 4 });
 const banE = sticky("## E · Payment and confirmation\n**Re-checks the slot after payment** — the race that would otherwise double-book. If it was lost, the deposit is refunded rather than the customer being quietly overbooked. On success: calendar event, receipt, SMS.", [], { name: 'Band E', position: [5200, 4940], width: 780, height: 120, color: 6 });
 const banF = sticky("## F · Follow-up nurture\nHourly sweep for bookings stuck at `form_opened`, `form_submitted` or `checkout_started` for over 24 hours. Chases once, then stamps `chase_count` so nobody is pestered twice.", [], { name: 'Band F', position: [2900, 6040], width: 760, height: 120, color: 2 });
-const banG = sticky("## G · Dashboard and exports — where every branch lands\nThe seven branches never touch on the canvas; they converge **here**, through the seven tables they share. G2–G6, G14 and G15 read all of them, G9 computes every aggregate once, and G10 serves the result as HTML, `?format=json` for Power BI and Looker Studio, or `?format=csv&dataset=…` for Salesforce and GoHighLevel.", [], { name: 'Band G', position: [4800, 6700], width: 700, height: 160, color: 6 });
+const banG = sticky("## G · Dashboard and exports — where every branch lands\nThe seven branches never touch on the canvas; they converge **here**, through the seven tables they share. G2–G6, G14 and G15 read all of them, G9 computes every aggregate once, and G10 serves the result as HTML, `?format=json` for Power BI and Looker Studio, or `?format=csv&dataset=…` for Salesforce and GoHighLevel.", [], { name: 'Band G', position: [5200, 6700], width: 700, height: 160, color: 6 });
 
 const cA1 = sticky("### A1 · Workflow Failed\n`Error Trigger`\n\n**In:** the failing execution, from n8n itself.\n**Out:** the raw error payload.", [], { name: 'c A1', position: [0, 8860], width: 300, height: 190, color: 3 });
 const cA2 = sticky("### A2 · Build Ops Event\n`Code`\n\n**Does:** flattens the nested error and clips every field so a stack trace cannot break the insert.\n**Out:** 1 `ops_events` row.", [], { name: 'c A2', position: [400, 8860], width: 300, height: 200, color: 5 });
@@ -1252,13 +1326,13 @@ const cG3 = sticky("### G3 · bookings", [], { name: 'c G3', position: [800, 716
 const cG4 = sticky("### G4 · messages", [], { name: 'c G4', position: [1200, 7160], width: 300, height: 150, color: 6 });
 const cG5 = sticky("### G5 · notifications", [], { name: 'c G5', position: [1600, 7160], width: 300, height: 150, color: 6 });
 const cG6 = sticky("### G6 · ops_events", [], { name: 'c G6', position: [2000, 7160], width: 300, height: 150, color: 6 });
-const cG7 = sticky("### G7 · Render Dashboard\n`Code`\n\nFunnel, post popularity, follow-up list, message volume, failures. Bot clicks excluded from every count.", [], { name: 'c G7', position: [4000, 6380], width: 300, height: 230, color: 5 });
-const cG8 = sticky("### G8 · Serve Page\n`Respond` 200 HTML", [], { name: 'c G8', position: [4400, 6380], width: 300, height: 170, color: 6 });
-const cG9 = sticky("### G9 · Build Datasets\n`Code`\n\n**Does:** every aggregate, computed once — KPIs, funnel, post popularity, the follow-up list, and a flat event fact table.\n**Out:** 1 item holding all five datasets.\n\nThe single source of truth for all three formats.", [], { name: 'c G9', position: [3200, 7160], width: 300, height: 250, color: 5 });
-const cG10 = sticky("### G10 · Which Format?\n`Switch` · reads `?format=`\n\n**json** → G11\n**csv** → G12\n**anything else** → the HTML page\n\nUnknown values fall back to the page rather than erroring.", [], { name: 'c G10', position: [3600, 7160], width: 300, height: 230, color: 5 });
-const cG11 = sticky("### G11 · Serve JSON\n`Respond` 200 JSON\n\nAll five datasets in one object. Power BI's **Web** connector expands each list into its own table from this single URL.", [], { name: 'c G11', position: [4000, 7160], width: 300, height: 190, color: 6 });
-const cG12 = sticky("### G12 · Build CSV\n`Code` · reads `?dataset=`\n\n`leads` (default) · `events` · `funnel` · `posts`\n\n**Does:** RFC-4180 quoting — commas, quotes and newlines inside a field cannot break the file.", [], { name: 'c G12', position: [4000, 7660], width: 300, height: 230, color: 5 });
-const cG13 = sticky("### G13 · Serve CSV\n`Respond` 200 text/csv\n\nSends `content-disposition: attachment`, so a browser downloads it and a CRM importer accepts it.", [], { name: 'c G13', position: [4400, 7660], width: 300, height: 190, color: 6 });
+const cG7 = sticky("### G7 · Render Dashboard\n`Code`\n\nFunnel, post popularity, follow-up list, message volume, failures. Bot clicks excluded from every count.", [], { name: 'c G7', position: [4400, 6380], width: 300, height: 230, color: 5 });
+const cG8 = sticky("### G8 · Serve Page\n`Respond` 200 HTML", [], { name: 'c G8', position: [4800, 6380], width: 300, height: 170, color: 6 });
+const cG9 = sticky("### G9 · Build Datasets\n`Code`\n\n**Does:** every aggregate, computed once — KPIs, funnel, post popularity, the follow-up list, and a flat event fact table.\n**Out:** 1 item holding all five datasets.\n\nThe single source of truth for all three formats.", [], { name: 'c G9', position: [3600, 7160], width: 300, height: 250, color: 5 });
+const cG10 = sticky("### G10 · Which Format?\n`Switch` · reads `?format=`\n\n**json** → G11\n**csv** → G12\n**anything else** → the HTML page\n\nUnknown values fall back to the page rather than erroring.", [], { name: 'c G10', position: [4000, 7160], width: 300, height: 230, color: 5 });
+const cG11 = sticky("### G11 · Serve JSON\n`Respond` 200 JSON\n\nAll five datasets in one object. Power BI's **Web** connector expands each list into its own table from this single URL.", [], { name: 'c G11', position: [4400, 7160], width: 300, height: 190, color: 6 });
+const cG12 = sticky("### G12 · Build CSV\n`Code` · reads `?dataset=`\n\n`leads` (default) · `events` · `funnel` · `posts`\n\n**Does:** RFC-4180 quoting — commas, quotes and newlines inside a field cannot break the file.", [], { name: 'c G12', position: [4400, 7660], width: 300, height: 230, color: 5 });
+const cG13 = sticky("### G13 · Serve CSV\n`Respond` 200 text/csv\n\nSends `content-disposition: attachment`, so a browser downloads it and a CRM importer accepts it.", [], { name: 'c G13', position: [4800, 7660], width: 300, height: 190, color: 6 });
 const cG14 = sticky("### G14 · payments\n`Data table` · get all\n\nWas write-only until now — money was recorded and never reported.", [], { name: 'c G14', position: [2400, 7160], width: 300, height: 190, color: 6 });
 const cG15 = sticky("### G15 · contacts\n`Data table` · get all\n\nWhere the **chatted but never booked** leads come from. Without this the follow-up list only saw people who reached the form.", [], { name: 'c G15', position: [2800, 7160], width: 300, height: 210, color: 6 });
 
@@ -1271,10 +1345,13 @@ const cGmailReceipt = sticky("### E9a · Gmail\n`Send` · **disabled**\n\nThe re
 const cTwilioSms = sticky("### E9b · Twilio\n`Send SMS` · **disabled**\n\nThe congratulatory text. `from` is a placeholder number — the only field you must change.", [], { name: 'c E9b', position: [4800, 4160], width: 300, height: 190, color: 4 });
 const cTwilioChase = sticky("### F4a · Twilio\n`Send SMS` · **disabled**\n\nThe follow-up text. **F4** already chose sms vs email per lead.", [], { name: 'c F4a', position: [1200, 5570], width: 300, height: 170, color: 4 });
 const cGmailChase = sticky("### F4b · Gmail\n`Send` · **disabled**\n\nThe email half of the same follow-up, for leads with no phone number.", [], { name: 'c F4b', position: [1600, 5570], width: 300, height: 170, color: 4 });
-const cSfLead = sticky("## \ud83d\udfe0 CRM + spreadsheet destinations \u00b7 5\n**Salesforce \u00b7 GoHighLevel \u00b7 HubSpot \u00b7 Pipedrive \u00b7 Google Sheets**\n\nEvery one hangs off **G12 Build CSV**, so they all receive the same `leads` rows the CSV export contains \u2014 push straight into the CRM instead of exporting a file and importing it by hand.\n\nGoHighLevel ships no n8n node, so it is an HTTP Request against the LeadConnector API \u2014 how you would wire it in production.", [], { name: 'c G12a', position: [5600, 7100], width: 700, height: 460, color: 2 });
+const cSfLead = sticky("## \ud83d\udfe0 CRM + spreadsheet destinations \u00b7 5\n**Salesforce \u00b7 GoHighLevel \u00b7 HubSpot \u00b7 Pipedrive \u00b7 Google Sheets**\n\nEvery one hangs off **G12 Build CSV**, so they all receive the same `leads` rows the CSV export contains \u2014 push straight into the CRM instead of exporting a file and importing it by hand.\n\nGoHighLevel ships no n8n node, so it is an HTTP Request against the LeadConnector API \u2014 how you would wire it in production.", [], { name: 'c G12a', position: [6000, 7100], width: 700, height: 460, color: 2 });
+const cPostLogRow = sticky("### H2a · Shape Log Row\n`Set`\n\nTrims to exactly the 11 `social_post_log` columns.", [], { name: 'c H2a', position: [1000, -1320], width: 300, height: 180, color: 4 });
+const cPostLogWrite = sticky("### H2b · Log Post\n`Data table` · insert\n\n**The publish record.** One row per post **per platform** — caption sent, character count against that platform's limit, whether it was truncated, the tracked link, and when.\n\n🔁 Continues on error — a lost log row must not stop a publish.\n\nStatus is `simulated`. Enable a platform node and move this after it to capture the real `remote_ref`.", [], { name: 'c H2b', position: [1400, -1320], width: 300, height: 200, color: 4 });
+const cDashPostLog = sticky("### G16 · social_post_log\n`Data table` · get all\n\n**The publish record.** Without it, post popularity was a group-by over clicks — so a post nobody clicked did not exist. Now every published post appears, including the flops.", [], { name: 'c G16', position: [3200, 7160], width: 300, height: 230, color: 6 });
 const banH = sticky("## H \u00b7 Publish \u2014 where the funnel actually starts\nThe piece that was missing. **H2** mints one tracked link per platform pointing at branch B's webhook, so every post carries its own `?p=<post>&c=<platform>`. That is what makes post popularity measurable at all.\n\nH2 runs for real \u2014 open it and you will see the nine links. The platforms are disabled.", [], { name: 'Band H', position: [0, -1300], width: 760, height: 200, color: 3 });
 const catSocial = sticky("## \ud83d\udfe2 Social platforms \u00b7 9\n**Facebook \u00b7 Instagram \u00b7 X \u00b7 LinkedIn \u00b7 WhatsApp \u00b7 Discord \u00b7 Reddit \u00b7 Telegram \u00b7 TikTok**\n\nEach receives the same caption with **its own tracked link** appended, so a click can always be traced back to the platform it came from.\n\nInstagram and TikTok ship no dedicated n8n node \u2014 Instagram goes through the Facebook Graph API and TikTok through the Content Posting API, which is exactly how you integrate them for real.", [], { name: 'Cat Social', position: [1450, -800], width: 700, height: 1700, color: 3 });
-const catDatabase = sticky("## \ud83d\udd35 Database destinations \u00b7 5\n**Postgres \u00b7 MySQL \u00b7 MongoDB \u00b7 Airtable \u00b7 Supabase**\n\nThese are what the eleven n8n data tables become at scale. The tables are perfect for a simulation and fine for low volume; past that you want a real database, and this is where it plugs in \u2014 same rows, same shape.\n\n**Power BI and Looker Studio need no node at all** \u2014 they read `?format=json` from the dashboard endpoint directly.", [], { name: 'Cat Database', position: [5600, 7620], width: 700, height: 460, color: 5 });
+const catDatabase = sticky("## \ud83d\udd35 Database destinations \u00b7 5\n**Postgres \u00b7 MySQL \u00b7 MongoDB \u00b7 Airtable \u00b7 Supabase**\n\nThese are what the eleven n8n data tables become at scale. The tables are perfect for a simulation and fine for low volume; past that you want a real database, and this is where it plugs in \u2014 same rows, same shape.\n\n**Power BI and Looker Studio need no node at all** \u2014 they read `?format=json` from the dashboard endpoint directly.", [], { name: 'Cat Database', position: [6000, 7620], width: 700, height: 460, color: 5 });
 
 export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in One (Simulated)')
   .add(errTrig).to(errBuild).to(slackAlert).to(errWrite)
@@ -1306,6 +1383,7 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(dashCsvBuild).to(airtableCreate)
   .add(dashCsvBuild).to(supabaseCreate)
   .add(postForm).to(postLinks)
+  .add(postLinks).to(postLogRow).to(postLogWrite)
   .add(postLinks).to(fbPublish)
   .add(postLinks).to(igPublish)
   .add(postLinks).to(xTweet)
@@ -1315,7 +1393,7 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(postLinks).to(rdPost)
   .add(postLinks).to(tgChannel)
   .add(postLinks).to(ttPublish)
-  .add(dashIn).to(dashClicks).to(dashBookings).to(dashMsgs).to(dashNotifs).to(dashOps).to(dashPayments).to(dashContacts).to(dashData)
+  .add(dashIn).to(dashClicks).to(dashBookings).to(dashMsgs).to(dashNotifs).to(dashOps).to(dashPayments).to(dashContacts).to(dashPostLog).to(dashData)
     .to(dashFormat
       .onCase(0, dashJson)
       .onCase(1, dashCsvBuild.to(dashCsvServe))
@@ -1331,4 +1409,5 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(cG9).add(cG10).add(cG11).add(cG12).add(cG13).add(cG14).add(cG15)
   .add(cSlack).add(cTgReply).add(cGcalAvail).add(cStripe).add(cGcalCreate)
   .add(cGmailReceipt).add(cTwilioSms).add(cTwilioChase).add(cGmailChase).add(cSfLead)
-  .add(banH).add(catSocial).add(catDatabase).add(legend);
+  .add(banH).add(catSocial).add(catDatabase).add(legend)
+  .add(cPostLogRow).add(cPostLogWrite).add(cDashPostLog);
