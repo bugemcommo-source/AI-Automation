@@ -199,6 +199,27 @@ td.mono{font-family:var(--mono);font-size:13px;color:var(--ink-2);white-space:no
 .pill.real{background:var(--accent-soft);color:var(--accent)}
 .pill.sim{background:var(--money-soft);color:var(--money)}
 
+/* ---------- try it ---------- */
+.trylist{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:18px}
+a.try{
+  display:block;text-decoration:none;color:inherit;background:var(--surface);
+  border:1px solid var(--rule);border-radius:4px;padding:20px 22px
+}
+a.try:hover{border-color:var(--accent)}
+a.try h4{font-family:var(--display);font-size:17.5px;font-weight:700;margin-bottom:8px;color:var(--accent)}
+a.try p{font-size:15.5px;line-height:1.55;color:var(--ink-2)}
+a.try .u{
+  display:block;font-family:var(--mono);font-size:11px;color:var(--ink-3);
+  margin-top:13px;word-break:break-all;line-height:1.5
+}
+a.try.locked h4{color:var(--ink)}
+a.try.locked{background:transparent;border-style:dashed}
+.herolink{
+  font-family:var(--mono);font-size:12.5px;font-weight:600;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--accent);text-decoration:none;
+  border-bottom:1px solid var(--accent);padding-bottom:3px;align-self:flex-start
+}
+
 /* ---------- callout ---------- */
 .callout{
   border-left:3px solid var(--money);background:var(--money-soft);
@@ -233,6 +254,7 @@ footer p{font-family:var(--mono);font-size:12.5px;color:var(--ink-3);line-height
       <div class="stat"><b>10</b><span>record books</span></div>
       <div class="stat"><b>0</b><span>staff needed</span></div>
     </div>
+    <a class="herolink" href="#try">Try the live demo &darr;</a>
   </div>
 </div>
 
@@ -616,6 +638,42 @@ footer p{font-family:var(--mono);font-size:12.5px;color:var(--ink-3);line-height
       <div class="guard"><h4>Link-preview robots</h4><p>When a chat app fetches your link to build a preview, that isn't counted as a person tapping it. Your click numbers stay honest.</p></div>
       <div class="guard"><h4>Somebody messages twice</h4><p>They keep the credit of the post that first brought them in. A later visit can't quietly steal it from the post that earned it.</p></div>
       <div class="guard"><h4>Anything else</h4><p>Any failure anywhere is caught, written down with the exact step that broke, and surfaced on the dashboard rather than disappearing.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="try">
+  <div class="wrap stack g28">
+    <div class="col stack g12">
+      <p class="eyebrow">Try it yourself</p>
+      <h2>It is running right now</h2>
+      <p class="lede">Everything described above is live. Book a session the way a customer would, then watch your own booking turn up on the dashboard.</p>
+    </div>
+    <div class="trylist">
+      <a class="try" href="https://gipre.app.n8n.cloud/form/110f8617-586a-4040-9109-400aa861c7c3" target="_blank" rel="noopener">
+        <h4>Book a session &rarr;</h4>
+        <p>The real booking form. Pick any date and time. The payment page is simulated &mdash; no card is asked for and nothing is ever charged.</p>
+        <span class="u">gipre.app.n8n.cloud/form/110f8617-586a-4040-9109-400aa861c7c3</span>
+      </a>
+      <a class="try" href="https://gipre.app.n8n.cloud/webhook/dashboard" target="_blank" rel="noopener">
+        <h4>The dashboard &rarr;</h4>
+        <p>Every post, click, conversation, booking and payment, counted from the records. Open it after you book and refresh &mdash; your booking will be there.</p>
+        <span class="u">gipre.app.n8n.cloud/webhook/dashboard</span>
+      </a>
+      <a class="try" href="https://gipre.app.n8n.cloud/form/33fbdd61-4249-427d-9dcc-14bed5ef703e" target="_blank" rel="noopener">
+        <h4>Publish a post &rarr;</h4>
+        <p>Write a caption once. It mints a separate tracked link for each of the nine platforms, trims the caption to fit each one, and logs the lot.</p>
+        <span class="u">gipre.app.n8n.cloud/form/33fbdd61-4249-427d-9dcc-14bed5ef703e</span>
+      </a>
+      <a class="try locked" href="https://gipre.app.n8n.cloud/workflow/TrCfAqLIaIkFAUK2" target="_blank" rel="noopener">
+        <h4>The workflow itself &rarr;</h4>
+        <p>All 198 steps on one canvas in n8n. <strong>Opens only for someone signed in to the n8n account that owns it</strong> &mdash; everything else on this page is open to anyone.</p>
+        <span class="u">gipre.app.n8n.cloud/workflow/TrCfAqLIaIkFAUK2</span>
+      </a>
+    </div>
+    <div class="callout">
+      <h4>One shared demonstration</h4>
+      <p>Everyone opening these links is using the same copy, so you may find bookings and posts that other people left behind. That is the demonstration working, not a fault. Nothing here reaches a real inbox, a real phone, a real social account or a real card.</p>
     </div>
   </div>
 </section>
