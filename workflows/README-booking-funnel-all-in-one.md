@@ -74,9 +74,10 @@ needs none, which is why the simulation stops there.
 
 ## What is simulated
 
-- **The calendar** — deterministic: a slot is busy when its hash mod 4 is
-  zero, so the same slot always answers the same way. Swap `D3` and `E3` for
-  Google Calendar to go live.
+- **The calendar** — a real `slots` table that `D3a` and `E2a` both read.
+  A slot is taken if it is `booked`, or `held` with `hold_expires_at` still in
+  the future; an absent row means free. Swap `D3a`/`E2a` for Google Calendar
+  to go live.
 - **The payment** — a link carrying `outcome=success` or `outcome=fail`.
   Swap `E1` for the Stripe Trigger.
 - **The receipt and SMS** — rows written to `notifications` as if delivered.
@@ -107,6 +108,7 @@ is what everyone else is doing too.
 | `bookings` | the funnel stage machine |
 | `payments` | deposits, simulated |
 | `notifications` | every email and SMS "sent" |
+| `slots` | the calendar — one row per taken slot, `held` or `booked` |
 | `ops_events` | every failure |
 
 All seven are read back by branch G. `payments` and `contacts` were write-only
@@ -133,11 +135,17 @@ Every branch was run against the live instance, both sides of every `If`:
 - **C** — `/start <token>` resolved the click to `post_002`, created the
   contact and sent the welcome; a follow-up question matched FAQ `F002` at
   0.5, offered the booking link, and kept the original post credited.
-- **D** — a busy slot ends the form politely with nothing charged; a free
-  slot writes the booking at `form_submitted` with the hold expiry set.
+- **D** — a slot already `booked` ends the form politely, saying why, with
+  nothing charged; a free slot writes the booking at `form_submitted` and
+  holds the slot for 20 minutes.
 - **E** — success confirms the booking, records the payment, mints the
-  calendar id and logs receipt + SMS; an unknown `booking_id` returns
-  `not_found` without touching money.
+  calendar id, marks the slot `booked` and logs receipt + SMS; an unknown
+  `booking_id` returns `not_found` without touching money.
+- **The race** — a booking whose hold lapsed, whose slot was then taken by
+  someone else, returns `slot_lost_refunded` naming the booking that took it,
+  and writes no payment. This is the path that could not fire before.
+- **Hold expiry** — a slot held by a stalled booking past its expiry is
+  reclaimed by the next person to ask for it.
 - **F** — chases a 24h-stalled booking by SMS and stamps `chase_count`; the
   next sweep finds nothing and stops cleanly.
 - **G** — counts reconcile against the tables; `?format=json` returns all five
@@ -157,12 +165,18 @@ table nodes use `update` rather than `upsert`, so neither can clobber a column
 it does not own. `D5` remains the only full-row builder, because it is the
 insert. `E9` and `E11` read the booking from `E3`, the one place it is loaded.
 
-One duplication is left deliberately: `hashOf` is defined in `B3`, `D3` and
-`E3`. n8n Code nodes cannot share a library, and `D3`/`E3` must stay
-byte-identical or the post-payment race guard silently disagrees with the
-pre-payment check. The honest fix is a `slots` table both nodes read — a real
-calendar is shared state, not a shared function — which is the right change to
-make before this ever handles real money.
+`hashOf` used to be defined three times, and the `D3`/`E3` pair was the
+dangerous one: two copies of a function that had to stay byte-identical or the
+race guard would disagree with the availability check. Both are now gone —
+`D3a` and `E2a` read the same `slots` row instead, because a real calendar is
+shared state, not a shared function. The one remaining `hashOf` lives in `B3`,
+where it anonymises IP addresses and has nothing to do with availability.
+
+Removing it exposed something worse than duplication. Because both copies were
+pure functions of `slot_start`, they could never disagree — which meant
+`slot_lost_refunded` was **unreachable code**. The guard looked right and did
+nothing. Reading shared state made it real: the branch now fires, and has been
+observed firing.
 
 ## Two bugs this shook out
 

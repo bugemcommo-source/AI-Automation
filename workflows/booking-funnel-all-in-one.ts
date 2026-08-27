@@ -327,39 +327,59 @@ const bookCfg = node({
     ] } } },
   output: [{ service: 'Studio session', total_amount: 4500, deposit_amount: 1500 }]
 });
+const bookSlotLookup = node({
+  type: 'n8n-nodes-base.dataTable', version: 1.1,
+  config: { name: 'D3a Look Up Slot', position: [720, 2200], alwaysOutputData: true, parameters: { resource: 'row', operation: 'get',
+    dataTableId: { __rl: true, mode: 'list', value: 'IWYUdhuJoEtwm4jT', cachedResultName: 'slots' },
+    matchType: 'allConditions',
+    filters: { conditions: [{ keyName: 'slot_start', condition: 'eq', keyValue: expr("{{ $('D1 Booking Form').first().json['Preferred date'] + 'T' + $('D1 Booking Form').first().json['Preferred time'] + ':00.000Z' }}") }] },
+    returnAll: false, limit: 1 } },
+  output: [{ slot_start: '2026-09-03T11:00:00.000Z', slot_end: '2026-09-03T12:30:00.000Z', status: 'booked', held_by: 'external', hold_expires_at: '', updated_at: '2026-08-20T00:00:00.000Z' }]
+});
 const bookAvail = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'D3 Check Availability', position: [720, 2200], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'D3 Check Availability', position: [1080, 2200], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const f = $('D1 Booking Form').first().json || {};
-const cfg = $input.first().json || {};
+const cfg = $('D2 Booking Config').first().json || {};
+const slotRows = $('D3a Look Up Slot').all().map(function (i) { return i.json; }).filter(function (r) { return r && r.slot_start; });
+const slot = slotRows[0] || null;
 const date = String(f['Preferred date'] || '').trim();
 const time = String(f['Preferred time'] || '').trim();
 const slotStart = date + 'T' + time + ':00.000Z';
-function hashOf(s) { let v = 0; for (let i = 0; i < s.length; i++) { v = ((v << 5) - v + s.charCodeAt(i)) | 0; } return Math.abs(v); }
-const busy = hashOf(slotStart) % 4 === 0;
+const nowIso = new Date().toISOString();
+let free = true;
+let reason = '';
+if (slot) {
+  if (slot.status === 'booked') { free = false; reason = 'already booked'; }
+  else if (slot.status === 'held') {
+    const exp = String(slot.hold_expires_at || '');
+    if (exp && exp > nowIso) { free = false; reason = 'held by another booking until ' + exp; }
+  }
+}
 const start = new Date(slotStart);
 const end = new Date(start.getTime() + 90 * 60000);
 const hold = new Date(Date.now() + (Number(cfg.hold_minutes) || 20) * 60000);
 return [{ json: {
-  free: !busy, slot_start: slotStart, slot_end: end.toISOString(), hold_expires_at: hold.toISOString(),
+  free: free, unavailable_reason: reason,
+  slot_start: slotStart, slot_end: end.toISOString(), hold_expires_at: hold.toISOString(),
   booking_id: 'BK-' + Date.now().toString(36).toUpperCase(),
   full_name: String(f['Full name'] || '').slice(0, 120), email: String(f.Email || '').slice(0, 160), phone: String(f.Phone || '').slice(0, 40),
   service: cfg.service, currency: cfg.currency, total_amount: Number(cfg.total_amount) || 0,
   deposit_amount: Number(cfg.deposit_amount) || 0, balance_due: (Number(cfg.total_amount) || 0) - (Number(cfg.deposit_amount) || 0),
   pay_url: cfg.pay_url
 }}];` } },
-  output: [{ free: true, slot_start: '2026-09-03T11:00:00.000Z', booking_id: 'BK-ABC', deposit_amount: 1500 }]
+  output: [{ free: true, unavailable_reason: '', slot_start: '2026-09-03T11:00:00.000Z', slot_end: '2026-09-03T12:30:00.000Z', hold_expires_at: '2026-09-01T00:20:00.000Z', booking_id: 'BK-ABC', deposit_amount: 1500 }]
 });
 const bookFree = ifElse({
   version: 2.3,
-  config: { name: 'D4 Slot Free?', position: [1080, 2200], parameters: {
+  config: { name: 'D4 Slot Free?', position: [1440, 2200], parameters: {
     conditions: { options: { caseSensitive: false, leftValue: '', typeValidation: 'loose' },
       conditions: [{ leftValue: expr('{{ $json.free }}'), operator: { type: 'boolean', operation: 'true', singleValue: true } }], combinator: 'and' },
     looseTypeValidation: true } }
 });
 const bookRow = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'D5 Build Booking Row', position: [1440, 2060], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'D5 Build Booking Row', position: [1800, 2060], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const a = $input.first().json;
 const q = ($('D1 Booking Form').first().json || {}).query || {};
 const now = new Date().toISOString();
@@ -374,23 +394,40 @@ return [{ json: {
 });
 const bookSave = node({
   type: 'n8n-nodes-base.dataTable', version: 1.1,
-  config: { name: 'D6 Save Booking', position: [1800, 2060], parameters: { resource: 'row', operation: 'upsert',
+  config: { name: 'D6 Save Booking', position: [2160, 2060], parameters: { resource: 'row', operation: 'upsert',
     dataTableId: { __rl: true, mode: 'list', value: 'ynKLNy71EOot9haS', cachedResultName: 'bookings' },
     matchType: 'allConditions',
     filters: { conditions: [{ keyName: 'booking_id', condition: 'eq', keyValue: expr('{{ $json.booking_id }}') }] },
     columns: { mappingMode: 'autoMapInputData', value: null, matchingColumns: [] } } },
   output: [{ id: 1 }]
 });
+const bookHold = node({
+  type: 'n8n-nodes-base.dataTable', version: 1.1,
+  config: { name: 'D6a Hold Slot', position: [2520, 2060], parameters: { resource: 'row', operation: 'upsert',
+    dataTableId: { __rl: true, mode: 'list', value: 'IWYUdhuJoEtwm4jT', cachedResultName: 'slots' },
+    matchType: 'allConditions',
+    filters: { conditions: [{ keyName: 'slot_start', condition: 'eq', keyValue: expr("{{ $('D3 Check Availability').first().json.slot_start }}") }] },
+    columns: { mappingMode: 'defineBelow', matchingColumns: [], value: {
+      slot_start: expr("{{ $('D3 Check Availability').first().json.slot_start }}"),
+      slot_end: expr("{{ $('D3 Check Availability').first().json.slot_end }}"),
+      status: 'held',
+      held_by: expr("{{ $('D3 Check Availability').first().json.booking_id }}"),
+      hold_expires_at: expr("{{ $('D3 Check Availability').first().json.hold_expires_at }}"),
+      updated_at: expr('{{ new Date().toISOString() }}')
+    } } } },
+  output: [{ slot_start: '2026-09-03T11:00:00.000Z', status: 'held', held_by: 'BK-ABC' }]
+});
 const bookPay = node({
   type: 'n8n-nodes-base.form', version: 2.5,
-  config: { name: 'D7 Show Deposit Link', position: [2160, 2060], parameters: { operation: 'completion', respondWith: 'showText',
+  config: { name: 'D7 Show Deposit Link', position: [2880, 2060], parameters: { operation: 'completion', respondWith: 'showText',
     responseText: expr("{{ '<h2>Slot held for you</h2><p>' + $('D3 Check Availability').first().json.slot_start + '</p><p>Deposit ' + $('D3 Check Availability').first().json.currency + ' ' + $('D3 Check Availability').first().json.deposit_amount + ' — balance ' + $('D3 Check Availability').first().json.balance_due + ' on the day.</p><p><a href=\"' + $('D3 Check Availability').first().json.pay_url + '?booking_id=' + $('D3 Check Availability').first().json.booking_id + '&outcome=success\">Pay deposit (simulated)</a></p><p><a href=\"' + $('D3 Check Availability').first().json.pay_url + '?booking_id=' + $('D3 Check Availability').first().json.booking_id + '&outcome=fail\">Simulate a failed payment</a></p>' }}") } },
   output: [{}]
 });
 const bookTaken = node({
   type: 'n8n-nodes-base.form', version: 2.5,
-  config: { name: 'D8 Slot Taken', position: [1440, 2340], parameters: { operation: 'completion', respondWith: 'text',
-    completionTitle: 'That slot has gone', completionMessage: 'Someone booked it just before you. Head back and pick another time — nothing has been charged.' } },
+  config: { name: 'D8 Slot Taken', position: [1800, 2340], parameters: { operation: 'completion', respondWith: 'text',
+    completionTitle: 'That slot has gone',
+    completionMessage: expr("{{ 'That slot is ' + $('D3 Check Availability').first().json.unavailable_reason + '. Head back and pick another time — nothing has been charged.' }}") } },
   output: [{}]
 });
 
@@ -408,36 +445,56 @@ const payLoad = node({
     returnAll: false, limit: 1 } },
   output: [{ booking_id: 'BK-ABC', stage: 'form_submitted', slot_start: '2026-09-03T11:00:00.000Z', deposit_amount: 1500 }]
 });
+const paySlotLookup = node({
+  type: 'n8n-nodes-base.dataTable', version: 1.1,
+  config: { name: 'E2a Look Up Slot', position: [720, 2900], alwaysOutputData: true, parameters: { resource: 'row', operation: 'get',
+    dataTableId: { __rl: true, mode: 'list', value: 'IWYUdhuJoEtwm4jT', cachedResultName: 'slots' },
+    matchType: 'allConditions',
+    filters: { conditions: [{ keyName: 'slot_start', condition: 'eq', keyValue: expr("{{ $json.slot_start || '__none__' }}") }] },
+    returnAll: false, limit: 1 } },
+  output: [{ slot_start: '2026-09-08T09:00:00.000Z', status: 'held', held_by: 'BK-OTHER', hold_expires_at: '2026-09-01T00:20:00.000Z' }]
+});
 const payCheck = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'E3 Verify and Re-check Slot', position: [720, 2900], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'E3 Verify and Re-check Slot', position: [1080, 2900], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const q = ($('E1 Payment Callback').first().json || {}).query || {};
 const rows = $('E2 Load Booking').all().map(function (i) { return i.json; }).filter(function (r) { return r && r.booking_id; });
 const bk = rows[0] || null;
+const slotRows = $('E2a Look Up Slot').all().map(function (i) { return i.json; }).filter(function (r) { return r && r.slot_start; });
+const slot = slotRows[0] || null;
 const outcome = String(q.outcome || 'success').toLowerCase();
-function hashOf(s) { let v = 0; for (let i = 0; i < s.length; i++) { v = ((v << 5) - v + s.charCodeAt(i)) | 0; } return Math.abs(v); }
-const stillFree = bk ? hashOf(String(bk.slot_start)) % 4 !== 0 : false;
+const nowIso = new Date().toISOString();
+let stillOurs = true;
+let lostReason = '';
+if (bk && slot && slot.held_by !== bk.booking_id) {
+  if (slot.status === 'booked') { stillOurs = false; lostReason = 'booked by ' + (slot.held_by || 'someone else'); }
+  else if (slot.status === 'held') {
+    const exp = String(slot.hold_expires_at || '');
+    if (exp && exp > nowIso) { stillOurs = false; lostReason = 'held by ' + (slot.held_by || 'someone else') + ' until ' + exp; }
+  }
+}
 let status = 'confirmed';
 if (!bk) { status = 'not_found'; }
 else if (outcome !== 'success') { status = 'payment_failed'; }
-else if (!stillFree) { status = 'slot_lost_refunded'; }
+else if (!stillOurs) { status = 'slot_lost_refunded'; }
 return [{ json: {
   status: status, found: bk !== null, booking: bk || {},
+  slot_lost_reason: lostReason,
   booking_id: bk ? bk.booking_id : String(q.booking_id || ''),
   calendar_event_id: status === 'confirmed' ? 'CAL-' + Date.now().toString(36).toUpperCase() : ''
 }}];` } },
-  output: [{ status: 'confirmed', found: true, booking_id: 'BK-ABC', calendar_event_id: 'CAL-X' }]
+  output: [{ status: 'confirmed', found: true, slot_lost_reason: '', booking_id: 'BK-ABC', calendar_event_id: 'CAL-X' }]
 });
 const payOk = ifElse({
   version: 2.3,
-  config: { name: 'E4 Confirmed?', position: [1080, 2900], parameters: {
+  config: { name: 'E4 Confirmed?', position: [1440, 2900], parameters: {
     conditions: { options: { caseSensitive: false, leftValue: '', typeValidation: 'loose' },
       conditions: [{ leftValue: expr('{{ $json.status }}'), operator: { type: 'string', operation: 'equals' }, rightValue: 'confirmed' }], combinator: 'and' },
     looseTypeValidation: true } }
 });
 const payRecord = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'E5 Build Payment Row', position: [1440, 2760], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'E5 Build Payment Row', position: [1800, 2760], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const r = $input.first().json; const bk = r.booking || {};
 return [{ json: {
   payment_id: 'PY-' + Date.now().toString(36).toUpperCase(), booking_id: r.booking_id,
@@ -449,14 +506,14 @@ return [{ json: {
 });
 const paySave = node({
   type: 'n8n-nodes-base.dataTable', version: 1.1,
-  config: { name: 'E6 Record Payment', position: [1800, 2760], parameters: { resource: 'row', operation: 'insert',
+  config: { name: 'E6 Record Payment', position: [2160, 2760], parameters: { resource: 'row', operation: 'insert',
     dataTableId: { __rl: true, mode: 'list', value: 'sHC4mr6HRvj84BHb', cachedResultName: 'payments' },
     columns: { mappingMode: 'autoMapInputData', value: null, matchingColumns: [] } } },
   output: [{ id: 1 }]
 });
 const payBooking = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'E7 Confirmed Booking Patch', position: [2160, 2760], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'E7 Confirmed Booking Patch', position: [2520, 2760], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const r = $('E3 Verify and Re-check Slot').first().json;
 const bk = r.booking || {};
 return [{ json: {
@@ -469,16 +526,32 @@ return [{ json: {
 });
 const payUpdate = node({
   type: 'n8n-nodes-base.dataTable', version: 1.1,
-  config: { name: 'E8 Confirm Booking', position: [2520, 2760], parameters: { resource: 'row', operation: 'update',
+  config: { name: 'E8 Confirm Booking', position: [2880, 2760], parameters: { resource: 'row', operation: 'update',
     dataTableId: { __rl: true, mode: 'list', value: 'ynKLNy71EOot9haS', cachedResultName: 'bookings' },
     matchType: 'allConditions',
     filters: { conditions: [{ keyName: 'booking_id', condition: 'eq', keyValue: expr('{{ $json.booking_id }}') }] },
     columns: { mappingMode: 'autoMapInputData', value: null, matchingColumns: [] } } },
   output: [{ id: 1 }]
 });
+const payBookSlot = node({
+  type: 'n8n-nodes-base.dataTable', version: 1.1,
+  config: { name: 'E8a Book Slot', position: [3240, 2760], parameters: { resource: 'row', operation: 'upsert',
+    dataTableId: { __rl: true, mode: 'list', value: 'IWYUdhuJoEtwm4jT', cachedResultName: 'slots' },
+    matchType: 'allConditions',
+    filters: { conditions: [{ keyName: 'slot_start', condition: 'eq', keyValue: expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.slot_start }}") }] },
+    columns: { mappingMode: 'defineBelow', matchingColumns: [], value: {
+      slot_start: expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.slot_start }}"),
+      slot_end: expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.slot_end }}"),
+      status: 'booked',
+      held_by: expr("{{ $('E3 Verify and Re-check Slot').first().json.booking.booking_id }}"),
+      hold_expires_at: '',
+      updated_at: expr('{{ new Date().toISOString() }}')
+    } } } },
+  output: [{ slot_start: '2026-09-08T09:00:00.000Z', status: 'booked', held_by: 'BK-ABC' }]
+});
 const payNotify = node({
   type: 'n8n-nodes-base.code', version: 2,
-  config: { name: 'E9 Build Receipt and SMS', position: [2880, 2760], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
+  config: { name: 'E9 Build Receipt and SMS', position: [3600, 2760], parameters: { mode: 'runOnceForAllItems', language: 'javaScript',
     jsCode: `const bk = ($('E3 Verify and Re-check Slot').first().json || {}).booking || {};
 const now = Date.now();
 return [
@@ -493,22 +566,22 @@ return [
 });
 const payNotifSave = node({
   type: 'n8n-nodes-base.dataTable', version: 1.1,
-  config: { name: 'E10 Log Notifications', position: [3240, 2760], onError: 'continueRegularOutput', parameters: { resource: 'row', operation: 'insert',
+  config: { name: 'E10 Log Notifications', position: [3960, 2760], onError: 'continueRegularOutput', parameters: { resource: 'row', operation: 'insert',
     dataTableId: { __rl: true, mode: 'list', value: 'm7De7p3q16f2B1kA', cachedResultName: 'notifications' },
     columns: { mappingMode: 'autoMapInputData', value: null, matchingColumns: [] } } },
   output: [{ id: 1 }]
 });
 const payDone = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
-  config: { name: 'E11 Confirm Page', position: [3600, 2760], parameters: { respondWith: 'text',
+  config: { name: 'E11 Confirm Page', position: [4320, 2760], parameters: { respondWith: 'text',
     responseBody: expr("{{ 'Booking ' + $('E3 Verify and Re-check Slot').first().json.booking.booking_id + ' confirmed for ' + $('E3 Verify and Re-check Slot').first().json.booking.slot_start + '. Receipt emailed and SMS sent (simulated). Balance ' + $('E3 Verify and Re-check Slot').first().json.booking.currency + ' ' + $('E3 Verify and Re-check Slot').first().json.booking.balance_due + ' due on the day.' }}"),
     options: { responseCode: 200 } } },
   output: [{}]
 });
 const payFail = node({
   type: 'n8n-nodes-base.respondToWebhook', version: 1.5,
-  config: { name: 'E12 Not Confirmed', position: [1440, 3040], parameters: { respondWith: 'text',
-    responseBody: expr("{{ 'Not confirmed — ' + $('E3 Verify and Re-check Slot').first().json.status + '. If the slot was lost after payment the deposit is refunded automatically (simulated).' }}"),
+  config: { name: 'E12 Not Confirmed', position: [1800, 3040], parameters: { respondWith: 'text',
+    responseBody: expr("{{ 'Not confirmed — ' + $('E3 Verify and Re-check Slot').first().json.status + ($('E3 Verify and Re-check Slot').first().json.slot_lost_reason ? ' (' + $('E3 Verify and Re-check Slot').first().json.slot_lost_reason + ')' : '') + '. If the slot was lost after payment the deposit is refunded automatically (simulated).' }}"),
     options: { responseCode: 200 } } },
   output: [{}]
 });
@@ -838,14 +911,14 @@ const dashCsvServe = node({
   output: [{}]
 });
 
-const readme = sticky("# Booking Funnel — All in One\n## Every branch of the funnel on a single canvas. Fully simulated, zero credentials.\n\nSeven independent entry points share one workflow and one set of ten data tables. Each trigger runs its own isolated execution, so the branches never interfere with each other.\n\n| Branch | Entry point |\n| --- | --- |\n| **A** Error handler | fires on this workflow's own failures |\n| **B** Click router | `GET /webhook/go?p=post_001&c=telegram` |\n| **C** Chat + agent | `POST /webhook/chat` |\n| **D** Booking form | the form trigger's public URL |\n| **E** Payment callback | `GET /webhook/pay?booking_id=…&outcome=success` |\n| **F** Nurture sweep | hourly schedule |\n| **G** Dashboard | `GET /webhook/dashboard` |\n\n### What is simulated\nThe calendar (deterministic — a slot is busy if its hash mod 4 is zero, so the same slot always answers the same), the payment (a link with `outcome=success` or `fail`), the receipt email and SMS (rows written as if delivered), and the LLM (keyword scoring over the `faq` table).\n\n### The tradeoff you accepted\nOne workflow means activation is all-or-nothing — you cannot pause the hourly sweep without also taking down the webhooks. Fine for a simulation; revisit before real money moves through it.", [], {
+const readme = sticky("# Booking Funnel — All in One\n## Every branch of the funnel on a single canvas. Fully simulated, zero credentials.\n\nSeven independent entry points share one workflow and one set of eleven data tables. Each trigger runs its own isolated execution, so the branches never interfere with each other.\n\n| Branch | Entry point |\n| --- | --- |\n| **A** Error handler | fires on this workflow's own failures |\n| **B** Click router | `GET /webhook/go?p=post_001&c=telegram` |\n| **C** Chat + agent | `POST /webhook/chat` |\n| **D** Booking form | the form trigger's public URL |\n| **E** Payment callback | `GET /webhook/pay?booking_id=…&outcome=success` |\n| **F** Nurture sweep | hourly schedule |\n| **G** Dashboard | `GET /webhook/dashboard` |\n\n### What is simulated\nThe calendar (a real `slots` table both D and E read — booked, or held until an expiry — rather than a formula), the payment (a link with `outcome=success` or `fail`), the receipt email and SMS (rows written as if delivered), and the LLM (keyword scoring over the `faq` table).\n\n### The tradeoff you accepted\nOne workflow means activation is all-or-nothing — you cannot pause the hourly sweep without also taking down the webhooks. Fine for a simulation; revisit before real money moves through it.", [], {
   name: 'README', position: [0, -620], width: 1500, height: 520, color: 7
 });
 const banA = sticky("## A · Error handling\nAn Error Trigger inside the workflow it monitors — n8n fires it automatically on any production failure, no settings needed. Every failure becomes an `ops_events` row, which is what the dashboard's error count reads.", [], { name: 'Band A', position: [1120, -60], width: 700, height: 120, color: 3 });
 const banB = sticky("## B · Click router — the entry point\nA tracked link in a post caption. Mints an attribution token, builds the platform's chat deep link, logs the click, then 302s. Bot hits are flagged, not dropped, so previewers cannot inflate your numbers.", [], { name: 'Band B', position: [2560, 640], width: 760, height: 120, color: 4 });
 const banC = sticky("## C · Chat and agent\nTrades the token for the click row — this is where attribution actually happens. Answers from the `faq` table by keyword scoring, logs both sides, and offers the booking link when someone asks to book.", [], { name: 'Band C', position: [4720, 1340], width: 760, height: 120, color: 5 });
-const banD = sticky("## D · Booking and deposit\nChecks the slot **before** taking money, holds it with an expiry, then shows a simulated payment link. A taken slot ends the form politely rather than charging for something unavailable.", [], { name: 'Band D', position: [2560, 2140], width: 760, height: 120, color: 4 });
-const banE = sticky("## E · Payment and confirmation\n**Re-checks the slot after payment** — the race that would otherwise double-book. If it was lost, the deposit is refunded rather than the customer being quietly overbooked. On success: calendar event, receipt, SMS.", [], { name: 'Band E', position: [4000, 2840], width: 780, height: 120, color: 6 });
+const banD = sticky("## D · Booking and deposit\nChecks the slot **before** taking money, holds it with an expiry, then shows a simulated payment link. A taken slot ends the form politely rather than charging for something unavailable.", [], { name: 'Band D', position: [3240, 2140], width: 760, height: 120, color: 4 });
+const banE = sticky("## E · Payment and confirmation\n**Re-checks the slot after payment** — the race that would otherwise double-book. If it was lost, the deposit is refunded rather than the customer being quietly overbooked. On success: calendar event, receipt, SMS.", [], { name: 'Band E', position: [4680, 2840], width: 780, height: 120, color: 6 });
 const banF = sticky("## F · Follow-up nurture\nHourly sweep for bookings stuck at `form_opened`, `form_submitted` or `checkout_started` for over 24 hours. Chases once, then stamps `chase_count` so nobody is pestered twice.", [], { name: 'Band F', position: [2560, 3640], width: 760, height: 120, color: 2 });
 const banG = sticky("## G · Dashboard and exports — where every branch lands\nThe seven branches never touch on the canvas; they converge **here**, through the seven tables they share. G2–G6, G14 and G15 read all of them, G9 computes every aggregate once, and G10 serves the result as HTML, `?format=json` for Power BI and Looker Studio, or `?format=csv&dataset=…` for Salesforce and GoHighLevel.", [], { name: 'Band G', position: [4320, 4380], width: 700, height: 160, color: 6 });
 
@@ -875,24 +948,28 @@ const cC12 = sticky("### C12 · Log Messages\n`Data table` · insert\n\n🔁 A f
 const cC13 = sticky("### C13 · Deliver Reply\n`Respond` 200 JSON\n\nIn simulation this **is** the delivery.", [], { name: 'c C13', position: [4320, 1540], width: 300, height: 190, color: 6 });
 const cD1 = sticky("### D1 · Booking Form\n`Form Trigger`\n\n**In:** name, email, phone, date, time.\n**Out:** the submission.", [], { name: 'c D1', position: [0, 2340], width: 300, height: 200, color: 7 });
 const cD2 = sticky("### D2 · Booking Config\n`Set`\n\n**Out:** price, deposit, hold minutes.\n\n👉 **Edit this node.**", [], { name: 'c D2', position: [360, 2340], width: 300, height: 200, color: 4 });
-const cD3 = sticky("### D3 · Check Availability\n`Code` · simulated calendar\n\nDeterministic: the same slot always answers the same.\n🔧 Swap for Google Calendar `availability`.", [], { name: 'c D3', position: [720, 2340], width: 300, height: 230, color: 5 });
-const cD4 = sticky("### D4 · Slot Free?\n`If`\n\n**true** → hold and take a deposit\n**false** → say so, charge nothing", [], { name: 'c D4', position: [1080, 2340], width: 300, height: 180, color: 5 });
-const cD5 = sticky("### D5 · Build Booking Row\n`Code`\n\n**Out:** 1 `bookings` row at stage `form_submitted`, with the hold expiry set.", [], { name: 'c D5', position: [1440, 1780], width: 300, height: 190, color: 4 });
-const cD6 = sticky("### D6 · Save Booking\n`Data table` · upsert\n\nKeyed on `booking_id`.", [], { name: 'c D6', position: [1800, 1780], width: 300, height: 170, color: 6 });
-const cD7 = sticky("### D7 · Show Deposit Link\n`Form` · completion\n\nRenders both simulated outcomes so you can test success **and** failure.", [], { name: 'c D7', position: [2160, 1780], width: 300, height: 200, color: 6 });
-const cD8 = sticky("### D8 · Slot Taken\n`Form` · completion\n\nEnds politely. Nothing is charged.", [], { name: 'c D8', position: [1440, 2500], width: 300, height: 180, color: 3 });
+const cD3 = sticky("### D3 · Check Availability\n`Code` · reads the `slots` row\n\n**booked** → taken.\n**held** → taken only while `hold_expires_at` is in the future; an expired hold is reclaimable.\n**absent** → free.\n\n🔧 Swap D3a for Google Calendar `availability`.", [], { name: 'c D3', position: [1080, 2340], width: 300, height: 230, color: 5 });
+const cD3a = sticky("### D3a · Look Up Slot\n`Data table` · get\n\nThe calendar is now **shared state**, not a formula.\n\n⚠️ `alwaysOutputData` — an absent row means nobody has taken this slot, which is the common case.", [], { name: 'c D3a', position: [720, 2340], width: 300, height: 230, color: 5 });
+const cD4 = sticky("### D4 · Slot Free?\n`If`\n\n**true** → hold and take a deposit\n**false** → say so, charge nothing", [], { name: 'c D4', position: [1440, 2340], width: 300, height: 180, color: 5 });
+const cD5 = sticky("### D5 · Build Booking Row\n`Code`\n\n**Out:** 1 `bookings` row at stage `form_submitted`, with the hold expiry set.", [], { name: 'c D5', position: [1800, 1800], width: 300, height: 190, color: 4 });
+const cD6 = sticky("### D6 · Save Booking\n`Data table` · upsert\n\nKeyed on `booking_id`.", [], { name: 'c D6', position: [2160, 1800], width: 300, height: 170, color: 6 });
+const cD6a = sticky("### D6a · Hold Slot\n`Data table` · upsert\n\nWrites the hold back so **E3 can find it**. Without this write the race guard has nothing to detect.", [], { name: 'c D6a', position: [2520, 1800], width: 300, height: 200, color: 6 });
+const cD7 = sticky("### D7 · Show Deposit Link\n`Form` · completion\n\nRenders both simulated outcomes so you can test success **and** failure.", [], { name: 'c D7', position: [2880, 1800], width: 300, height: 200, color: 6 });
+const cD8 = sticky("### D8 · Slot Taken\n`Form` · completion\n\nNow says **why** — booked, or held by someone else until a stated time. Nothing is charged.", [], { name: 'c D8', position: [1800, 2500], width: 300, height: 180, color: 3 });
 const cE1 = sticky("### E1 · Payment Callback\n`Webhook` GET /pay\n\n**In:** `booking_id`, `outcome`.\n🔧 Swap for the Stripe Trigger.", [], { name: 'c E1', position: [0, 3040], width: 300, height: 190, color: 7 });
 const cE2 = sticky("### E2 · Load Booking\n`Data table` · get\n\n⚠️ `alwaysOutputData` — an unknown id must not kill the chain.", [], { name: 'c E2', position: [360, 3040], width: 300, height: 180, color: 6 });
-const cE3 = sticky("### E3 · Verify and Re-check Slot\n`Code`\n\n**The race guard.** The slot can go while the card is being entered, so it is checked again here.\n**Out:** `confirmed` · `payment_failed` · `slot_lost_refunded` · `not_found`", [], { name: 'c E3', position: [720, 3040], width: 300, height: 240, color: 5 });
-const cE4 = sticky("### E4 · Confirmed?\n`If`\n\nOnly a clean confirm writes money and calendar.", [], { name: 'c E4', position: [1080, 3040], width: 300, height: 170, color: 5 });
-const cE5 = sticky("### E5 · Build Payment Row\n`Code`\n\n**Out:** 1 `payments` row, provider `simulated`.", [], { name: 'c E5', position: [1440, 2480], width: 300, height: 170, color: 4 });
-const cE6 = sticky("### E6 · Record Payment\n`Data table` · insert", [], { name: 'c E6', position: [1800, 2480], width: 300, height: 160, color: 6 });
-const cE7 = sticky("### E7 · Confirmed Booking Patch\n`Code`\n\n**Out:** only the 4 columns that actually change — `stage`, `calendar_event_id`, `updated_at`, keyed on `booking_id`.\n\nThe other 17 stay exactly as the form wrote them.", [], { name: 'c E7', position: [2160, 2480], width: 300, height: 190, color: 4 });
-const cE8 = sticky("### E8 · Confirm Booking\n`Data table` · **update**\n\nPartial update, not upsert — this node cannot clobber a column it does not own.", [], { name: 'c E8', position: [2520, 2480], width: 300, height: 160, color: 6 });
-const cE9 = sticky("### E9 · Build Receipt and SMS\n`Code`\n\nReads the booking from **E3**, the one place it is loaded.\n**Out:** 2 `notifications` rows.\n🔧 Swap for Gmail + Twilio.", [], { name: 'c E9', position: [2880, 2480], width: 300, height: 210, color: 4 });
-const cE10 = sticky("### E10 · Log Notifications\n`Data table` · insert\n\nFeeds the sent-message counts.", [], { name: 'c E10', position: [3240, 2480], width: 300, height: 170, color: 6 });
-const cE11 = sticky("### E11 · Confirm Page\n`Respond` 200\n\nStates deposit paid **and** balance still due.", [], { name: 'c E11', position: [3600, 2480], width: 300, height: 190, color: 6 });
-const cE12 = sticky("### E12 · Not Confirmed\n`Respond` 200\n\nNames which of the three failure modes happened.", [], { name: 'c E12', position: [1440, 3200], width: 300, height: 190, color: 3 });
+const cE2a = sticky("### E2a · Look Up Slot\n`Data table` · get\n\nReads the **same row D3a read**, minutes later. That is the whole point — two reads of one shared fact, not two copies of one formula.", [], { name: 'c E2a', position: [720, 3040], width: 300, height: 220, color: 5 });
+const cE3 = sticky("### E3 · Verify and Re-check Slot\n`Code` · reads the `slots` row\n\n**The race guard — and it can now actually fire.** While it hashed `slot_start` it always agreed with D3, so `slot_lost_refunded` was unreachable.\n\nLost if the slot is booked, or held, by a **different** booking whose hold has not expired.\n\n**Out:** `confirmed` · `payment_failed` · `slot_lost_refunded` · `not_found`", [], { name: 'c E3', position: [1080, 3040], width: 300, height: 240, color: 5 });
+const cE4 = sticky("### E4 · Confirmed?\n`If`\n\nOnly a clean confirm writes money and calendar.", [], { name: 'c E4', position: [1440, 3040], width: 300, height: 170, color: 5 });
+const cE5 = sticky("### E5 · Build Payment Row\n`Code`\n\n**Out:** 1 `payments` row, provider `simulated`.", [], { name: 'c E5', position: [1800, 2480], width: 300, height: 170, color: 4 });
+const cE6 = sticky("### E6 · Record Payment\n`Data table` · insert", [], { name: 'c E6', position: [2160, 2480], width: 300, height: 160, color: 6 });
+const cE7 = sticky("### E7 · Confirmed Booking Patch\n`Code`\n\n**Out:** only the 4 columns that actually change — `stage`, `calendar_event_id`, `updated_at`, keyed on `booking_id`.\n\nThe other 17 stay exactly as the form wrote them.", [], { name: 'c E7', position: [2520, 2480], width: 300, height: 190, color: 4 });
+const cE8 = sticky("### E8 · Confirm Booking\n`Data table` · **update**\n\nPartial update, not upsert — this node cannot clobber a column it does not own.", [], { name: 'c E8', position: [2880, 2480], width: 300, height: 160, color: 6 });
+const cE8a = sticky("### E8a · Book Slot\n`Data table` · upsert\n\nHold → booked. Clears `hold_expires_at`: a confirmed slot never becomes reclaimable.", [], { name: 'c E8a', position: [3240, 2480], width: 300, height: 200, color: 6 });
+const cE9 = sticky("### E9 · Build Receipt and SMS\n`Code`\n\nReads the booking from **E3**, the one place it is loaded.\n**Out:** 2 `notifications` rows.\n🔧 Swap for Gmail + Twilio.", [], { name: 'c E9', position: [3600, 2480], width: 300, height: 210, color: 4 });
+const cE10 = sticky("### E10 · Log Notifications\n`Data table` · insert\n\nFeeds the sent-message counts.", [], { name: 'c E10', position: [3960, 2480], width: 300, height: 170, color: 6 });
+const cE11 = sticky("### E11 · Confirm Page\n`Respond` 200\n\nStates deposit paid **and** balance still due.", [], { name: 'c E11', position: [4320, 2480], width: 300, height: 190, color: 6 });
+const cE12 = sticky("### E12 · Not Confirmed\n`Respond` 200\n\nNames which of the three failure modes happened.", [], { name: 'c E12', position: [1800, 3200], width: 300, height: 190, color: 3 });
 const cF1 = sticky("### F1 · Hourly Sweep\n`Schedule` · every hour", [], { name: 'c F1', position: [0, 3840], width: 300, height: 170, color: 7 });
 const cF2 = sticky("### F2 · Load Bookings\n`Data table` · get all", [], { name: 'c F2', position: [360, 3840], width: 300, height: 170, color: 6 });
 const cF3 = sticky("### F3 · Find Stalled\n`Code`\n\nStuck stages, older than 24h, not yet chased.\nZero matches is correct — the chain simply stops.", [], { name: 'c F3', position: [720, 3840], width: 300, height: 220, color: 5 });
@@ -922,10 +999,10 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
     .to(clickOk.onTrue(clickRow.to(clickLog.to(clickGo))).onFalse(clickBad))
   .add(chatIn).to(botCfg).to(chatNorm).to(chatClick).to(chatContact).to(chatSession)
     .to(chatContactRow).to(chatUpsert).to(chatFaq).to(chatReply).to(chatMsgRows).to(chatLog).to(chatOut)
-  .add(bookForm).to(bookCfg).to(bookAvail)
-    .to(bookFree.onTrue(bookRow.to(bookSave.to(bookPay))).onFalse(bookTaken))
-  .add(payIn).to(payLoad).to(payCheck)
-    .to(payOk.onTrue(payRecord.to(paySave.to(payBooking.to(payUpdate.to(payNotify.to(payNotifSave.to(payDone))))))).onFalse(payFail))
+  .add(bookForm).to(bookCfg).to(bookSlotLookup).to(bookAvail)
+    .to(bookFree.onTrue(bookRow.to(bookSave.to(bookHold.to(bookPay)))).onFalse(bookTaken))
+  .add(payIn).to(payLoad).to(paySlotLookup).to(payCheck)
+    .to(payOk.onTrue(payRecord.to(paySave.to(payBooking.to(payUpdate.to(payBookSlot.to(payNotify.to(payNotifSave.to(payDone)))))))).onFalse(payFail))
   .add(nurTrig).to(nurLoad).to(nurFind).to(nurBuild).to(nurLog).to(nurMark).to(nurSave)
   .add(dashIn).to(dashClicks).to(dashBookings).to(dashMsgs).to(dashNotifs).to(dashOps).to(dashPayments).to(dashContacts).to(dashData)
     .to(dashFormat
@@ -936,8 +1013,8 @@ export default workflow('booking-funnel-all-in-one', 'Booking Funnel — All in 
   .add(cA1).add(cA2).add(cA3)
   .add(cB1).add(cB2).add(cB3).add(cB4).add(cB5).add(cB6).add(cB7).add(cB8)
   .add(cC1).add(cC2).add(cC3).add(cC4).add(cC5).add(cC6).add(cC7).add(cC8).add(cC9).add(cC10).add(cC11).add(cC12).add(cC13)
-  .add(cD1).add(cD2).add(cD3).add(cD4).add(cD5).add(cD6).add(cD7).add(cD8)
-  .add(cE1).add(cE2).add(cE3).add(cE4).add(cE5).add(cE6).add(cE7).add(cE8).add(cE9).add(cE10).add(cE11).add(cE12)
+  .add(cD1).add(cD2).add(cD3a).add(cD3).add(cD4).add(cD5).add(cD6).add(cD6a).add(cD7).add(cD8)
+  .add(cE1).add(cE2).add(cE2a).add(cE3).add(cE4).add(cE5).add(cE6).add(cE7).add(cE8).add(cE8a).add(cE9).add(cE10).add(cE11).add(cE12)
   .add(cF1).add(cF2).add(cF3).add(cF4).add(cF5).add(cF6).add(cF7)
   .add(cG1).add(cG2).add(cG3).add(cG4).add(cG5).add(cG6).add(cG7).add(cG8)
   .add(cG9).add(cG10).add(cG11).add(cG12).add(cG13).add(cG14).add(cG15);
