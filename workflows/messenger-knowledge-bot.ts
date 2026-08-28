@@ -1,4 +1,4 @@
-import { workflow, node, trigger, sticky, newCredential, placeholder, ifElse, splitInBatches, languageModel, memory, outputParser, expr } from '@n8n/workflow-sdk';
+import { workflow, node, trigger, sticky, newCredential, placeholder, ifElse, switchCase, splitInBatches, languageModel, memory, outputParser, expr } from '@n8n/workflow-sdk';
 
 const verifyHook = trigger({
   type: 'n8n-nodes-base.webhook',
@@ -163,10 +163,18 @@ const evt = (entry.messaging && entry.messaging[0]) || {};
 const msg = evt.message || {};
 const pageId = String(entry.id || '');
 
-// ---- 3. Reasons to stop, cheapest first ----------------------------------
+// ---- 3. Whose message is this? -------------------------------------------
 // is_echo is the one that bites everybody: our own outbound messages arrive
 // back as webhooks, and without this the bot answers itself forever.
+//
+// But not every echo is ours. Meta stamps replies typed in the Facebook Page
+// inbox with app_id 263902037430900, so an echo carrying THAT id is proof a
+// human just picked the conversation up. That is the handoff signal, and it
+// arrives for free — no button, no second app, no polling.
+const PAGE_INBOX_APP_ID = 263902037430900;
 const isEcho = msg.is_echo === true;
+const echoAppId = Number(msg.app_id || evt.app_id || 0);
+const isHumanReply = isEcho && echoAppId === PAGE_INBOX_APP_ID;
 const text = String(msg.text || '').trim();
 const psid = String((evt.sender && evt.sender.id) || '');
 const mid = String(msg.mid || '');
@@ -182,16 +190,27 @@ const effectiveText = text || postbackText;
 // but there is nothing to answer. They get a canned reply, not a model call.
 const hasAttachment = Array.isArray(msg.attachments) && msg.attachments.length > 0;
 
+// The recipient is the customer on a human echo, and the sender on a normal
+// inbound message — the PSID we key everything on is the customer either way.
+const echoPsid = String((evt.recipient && evt.recipient.id) || '');
+
 let drop = '';
+let route = 'process';
 if (!parseOk) { drop = 'unparseable_body'; }
 else if (!sigOk) { drop = 'bad_signature'; }
+else if (isHumanReply) { route = 'human_reply'; }
 else if (isEcho) { drop = 'echo'; }
 else if (!psid) { drop = 'no_sender'; }
 else if (effectiveText === '' && !hasAttachment) { drop = 'no_content'; }
+if (drop !== '') { route = 'drop'; }
 
 return [{ json: {
+  route: route,
   process: drop === '',
   drop_reason: drop,
+  is_human_reply: isHumanReply,
+  human_psid: echoPsid,
+  human_text: isHumanReply ? String(msg.text || '') : '',
   signature_ok: sigOk,
   psid: psid,
   mid: mid,
@@ -204,26 +223,49 @@ return [{ json: {
 }}];`
     }
   },
-  output: [{ process: true, drop_reason: '', signature_ok: true, psid: '7842910', mid: 'm_abc', page_id: '1029384', text: 'magkano ang deep tissue?', has_attachment: false, attachment_only: false, referral_ref: '', received_at: '2026-08-28T02:10:00.000Z' }]
+  output: [{ route: 'process', process: true, drop_reason: '', is_human_reply: false, human_psid: '', human_text: '', signature_ok: true, psid: '7842910', mid: 'm_abc', page_id: '1029384', text: 'magkano ang deep tissue?', has_attachment: false, attachment_only: false, referral_ref: '', received_at: '2026-08-28T02:10:00.000Z' }]
 });
 
-const keepReal = node({
-  type: 'n8n-nodes-base.filter',
-  version: 2.3,
+const routeEvent = switchCase({
+  version: 3.4,
   config: {
-    name: 'B5 Drop Echoes And Forgeries',
+    name: 'B5 Route The Event',
     position: [840, 500],
     parameters: {
-      conditions: {
-        options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
-        conditions: [
-          { leftValue: expr('{{ $json.process }}'), operator: { type: 'boolean', operation: 'true', singleValue: true } }
-        ],
-        combinator: 'and'
-      }
+      rules: {
+        values: [
+          { outputKey: 'process', conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, conditions: [{ leftValue: expr('{{ $json.route }}'), operator: { type: 'string', operation: 'equals' }, rightValue: 'process' }], combinator: 'and' } },
+          { outputKey: 'human_reply', conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, conditions: [{ leftValue: expr('{{ $json.route }}'), operator: { type: 'string', operation: 'equals' }, rightValue: 'human_reply' }], combinator: 'and' } }
+        ]
+      },
+      options: { fallbackOutput: 'extra', renameFallbackOutput: 'drop' }
     }
+  }
+});
+
+const recordHumanReply = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'B5a A Human Took Over',
+    position: [1120, 200],
+    parameters: {
+      operation: 'executeQuery',
+      query: 'select * from bot_record_human_reply($1, $2, $3);',
+      options: {
+        queryReplacement: expr('{{ $json.human_psid }},{{ $json.mid }},{{ $json.human_text }}')
+      }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
   },
-  output: [{ process: true, psid: '7842910', mid: 'm_abc', text: 'magkano ang deep tissue?' }]
+  output: [{ recorded: true, escalation_id: 12 }]
+});
+
+const droppedEvent = node({
+  type: 'n8n-nodes-base.noOp',
+  version: 1,
+  config: { name: 'B5b Ignore — Echo Or Forgery', position: [1120, 940] },
+  output: [{}]
 });
 
 const botGate = node({
@@ -244,19 +286,24 @@ const botGate = node({
   output: [{ allow: true, reason: 'ok', is_new_contact: true, status: 'bot', clean_text: 'magkano ang deep tissue?', history: [] }]
 });
 
-const gateAllows = ifElse({
-  version: 2.3,
+const routeDecision = switchCase({
+  version: 3.4,
   config: {
-    name: 'B7 Cleared To Answer?',
+    name: 'B7 Answer, Escalate, Or Stop',
     position: [1400, 500],
     parameters: {
-      conditions: {
-        options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
-        conditions: [
-          { leftValue: expr('{{ $json.allow }}'), operator: { type: 'boolean', operation: 'true', singleValue: true } }
-        ],
-        combinator: 'and'
-      }
+      rules: {
+        values: [
+          { outputKey: 'escalate', conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, conditions: [
+            { leftValue: expr('{{ $json.allow }}'), operator: { type: 'boolean', operation: 'true', singleValue: true } },
+            { leftValue: expr('{{ $json.force_escalate }}'), operator: { type: 'boolean', operation: 'true', singleValue: true } }
+          ], combinator: 'and' } },
+          { outputKey: 'answer', conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' }, conditions: [
+            { leftValue: expr('{{ $json.allow }}'), operator: { type: 'boolean', operation: 'true', singleValue: true } }
+          ], combinator: 'and' } }
+        ]
+      },
+      options: { fallbackOutput: 'extra', renameFallbackOutput: 'stop' }
     }
   }
 });
@@ -266,6 +313,140 @@ const stopQuietly = node({
   version: 1,
   config: { name: 'B8 Stop — Already Logged', position: [1680, 720] },
   output: [{}]
+});
+
+const buildEscalationReply = node({
+  type: 'n8n-nodes-base.code',
+  version: 2,
+  config: {
+    name: 'B19 Compose Handover Line',
+    position: [1680, 940],
+    parameters: {
+      mode: 'runOnceForAllItems',
+      language: 'javaScript',
+      jsCode: `const gate = $input.first().json;
+const msg = $('B4 Verify Signature And Normalize').first().json;
+
+// Deterministic replies. A customer who has just said "I want a refund" or
+// "let me talk to a person" does not need a generated sentence — they need a
+// fast, predictable one, and this path never spends a model call to produce it.
+const LINES = {
+  asked_for_human:   'Of course — I am handing you to a member of the team now. They will reply right here shortly.',
+  money_dispute:     'I am sorry about that. Anything to do with payments or refunds goes straight to a person — someone will reply here shortly.',
+  cancellation:      'For changes to an existing booking I will get a team member to take over. They will reply here shortly.',
+  existing_booking:  'Let me get someone who can look up your booking. They will reply here shortly.',
+  medical_or_safety: 'That is something I should not answer myself. I am passing you to a team member now, and they will reply here shortly.',
+  legal_or_press:    'I am passing this to the team so the right person can respond. They will reply here shortly.',
+  repeated_question: 'I do not think I am answering this well. Let me hand you to a person who can — they will reply here shortly.'
+};
+
+const reason = String(gate.escalate_reason || 'asked_for_human');
+const reply = LINES[reason] || 'Let me get a team member to help with this. They will reply here shortly.';
+
+return [{ json: {
+  psid: msg.psid,
+  question: gate.clean_text,
+  reason: reason,
+  reply: reply
+}}];`
+    }
+  },
+  output: [{ psid: '7842910', question: 'can i talk to a real person', reason: 'asked_for_human', reply: 'Of course — I am handing you to a member of the team now.' }]
+});
+
+const recordEscalation = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'B20 Open Escalation',
+    position: [1960, 940],
+    parameters: {
+      operation: 'executeQuery',
+      // Starts the SLA clock, logs the outbound line at zero cost, and mutes
+      // the bot on this thread — the same end state the model path reaches.
+      query: 'select bot_escalate($1, $2, $3, $4, $5) as escalation_id;',
+      options: {
+        queryReplacement: expr('{{ $json.psid }},{{ $json.question }},{{ $json.reason }},{{ $json.reply }},keyword')
+      }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ escalation_id: 7 }]
+});
+
+const sendEscalationReply = node({
+  type: 'n8n-nodes-base.httpRequest',
+  version: 4.5,
+  config: {
+    name: 'B21 Send Handover Line',
+    position: [2240, 940],
+    parameters: {
+      method: 'POST',
+      url: 'https://graph.facebook.com/v21.0/me/messages',
+      authentication: 'genericCredentialType',
+      genericAuthType: 'httpTemplatedCustomAuth',
+      sendBody: true,
+      contentType: 'json',
+      specifyBody: 'json',
+      jsonBody: expr('{{ JSON.stringify({ recipient: { id: $(\'B19 Compose Handover Line\').item.json.psid }, messaging_type: "RESPONSE", message: { text: $(\'B19 Compose Handover Line\').item.json.reply } }) }}'),
+      options: { timeout: 10000 }
+    },
+    credentials: { httpTemplatedCustomAuth: newCredential('Meta Page Access Token') }
+  },
+  output: [{ recipient_id: '7842910', message_id: 'm_esc' }]
+});
+
+const alertFromRule = node({
+  type: 'n8n-nodes-base.code',
+  version: 2,
+  config: {
+    name: 'B22 Build Alert — Rule',
+    position: [2520, 940],
+    parameters: {
+      mode: 'runOnceForAllItems',
+      language: 'javaScript',
+      jsCode: `const e = $('B19 Compose Handover Line').first().json;
+const gate = $('B6 Rate Limit And Dedupe Gate').first().json;
+const turns = Array.isArray(gate.history) ? gate.history : [];
+const lines = [];
+for (let i = turns.length - 1; i >= 0; i--) {
+  lines.push((turns[i].direction === 'inbound' ? 'Customer: ' : 'Bot: ') + turns[i].body);
+}
+return [{ json: {
+  psid: e.psid,
+  question: e.question,
+  reason: e.reason,
+  trigger: 'rule',
+  transcript: lines.join('\n')
+}}];`
+    }
+  },
+  output: [{ psid: '7842910', question: 'can i talk to a real person', reason: 'asked_for_human', trigger: 'rule', transcript: 'Customer: can i talk to a real person' }]
+});
+
+const alertFromModel = node({
+  type: 'n8n-nodes-base.code',
+  version: 2,
+  config: {
+    name: 'B22b Build Alert — Model',
+    position: [3920, 620],
+    parameters: {
+      mode: 'runOnceForAllItems',
+      language: 'javaScript',
+      jsCode: `const v = $('B13 Read Verdict And Estimate Cost').first().json;
+const ctx = $('B11 Assemble Prompt Context').first().json;
+const lines = String(ctx.history_text || '').split('\n');
+lines.push('Customer: ' + v.question);
+return [{ json: {
+  psid: v.psid,
+  question: v.question,
+  reason: 'no_grounded_answer',
+  trigger: 'model',
+  transcript: lines.join('\n')
+}}];`
+    }
+  },
+  output: [{ psid: '7842910', question: 'do you take HMO?', reason: 'no_grounded_answer', trigger: 'model', transcript: 'Customer: do you take HMO?' }]
 });
 
 const typingOn = node({
@@ -567,12 +748,12 @@ const answeredEnd = node({
   output: [{}]
 });
 
-const notifyOwner = node({
+const sendAlert = node({
   type: 'n8n-nodes-base.httpRequest',
   version: 4.5,
   config: {
-    name: 'B18 Alert Owner — Needs A Human',
-    position: [3920, 620],
+    name: 'B23 Alert The Team',
+    position: [4200, 780],
     onError: 'continueRegularOutput',
     parameters: {
       method: 'POST',
@@ -580,11 +761,100 @@ const notifyOwner = node({
       sendBody: true,
       contentType: 'json',
       specifyBody: 'json',
-      jsonBody: expr('{{ JSON.stringify({ text: "Messenger bot could not answer:\\n> " + $(\'B13 Read Verdict And Estimate Cost\').item.json.question + "\\nPSID: " + $(\'B13 Read Verdict And Estimate Cost\').item.json.psid }) }}'),
+      // Both escalation paths converge here, so this reads $json — which is
+      // whichever "Build Alert" node ran — rather than naming one of them.
+      jsonBody: expr('{{ JSON.stringify({ text: "*Needs a human* (" + $json.reason + " / " + $json.trigger + ")\n\n" + $json.transcript + "\n\nReply in the Page inbox. PSID: " + $json.psid }) }}'),
       options: { timeout: 8000 }
     }
   },
   output: [{ ok: true }]
+});
+
+const sweepSchedule = trigger({
+  type: 'n8n-nodes-base.scheduleTrigger',
+  version: 1.2,
+  config: {
+    name: 'D1 Every 10 Minutes',
+    position: [0, 2300],
+    parameters: { rule: { interval: [{ field: 'minutes', minutesInterval: 10 }] } }
+  },
+  output: [{}]
+});
+
+const findOverdue = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'D2 Escalations Past Their SLA',
+    position: [280, 2300],
+    parameters: {
+      operation: 'executeQuery',
+      // Only returns escalations nobody has answered yet, past the SLA, and
+      // either never chased or last chased long enough ago to chase again.
+      query: 'select * from bot_pending_nudges();',
+      options: {}
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ escalation_id: 7, psid: '7842910', display_name: 'Ana Cruz', question: 'do you take HMO?', reason: 'no_grounded_answer', waiting_mins: 42, nudge_count: 0, transcript: [] }]
+});
+
+const chaseTeam = node({
+  type: 'n8n-nodes-base.httpRequest',
+  version: 4.5,
+  config: {
+    name: 'D3 Chase The Team',
+    position: [560, 2300],
+    onError: 'continueRegularOutput',
+    parameters: {
+      method: 'POST',
+      url: placeholder('Same destination as B23 — where escalations are actually watched'),
+      sendBody: true,
+      contentType: 'json',
+      specifyBody: 'json',
+      jsonBody: expr('{{ JSON.stringify({ text: "*Still waiting* — " + $json.waiting_mins + " minutes, no reply yet.\n" + ($json.display_name || "A customer") + " asked: " + $json.question + "\nPSID: " + $json.psid }) }}'),
+      options: { timeout: 8000 }
+    }
+  },
+  output: [{ ok: true }]
+});
+
+const markChased = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'D4 Record The Chase',
+    position: [840, 2300],
+    parameters: {
+      operation: 'executeQuery',
+      // Without this the same escalation would be re-alerted every 10 minutes
+      // until someone replied, which is how alerting gets muted by the people
+      // it is meant to reach.
+      query: 'select bot_mark_nudged($1) as marked;',
+      options: { queryReplacement: expr("{{ $('D2 Escalations Past Their SLA').item.json.escalation_id }}") }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ marked: true }]
+});
+
+const autoRelease = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'D5 Return Quiet Threads To The Bot',
+    position: [280, 2560],
+    parameters: {
+      operation: 'executeQuery',
+      // Only releases threads where a human DID reply and the conversation
+      // then went quiet. A thread nobody ever answered is never auto-released
+      // — that would silently drop a customer who was promised a callback.
+      query: 'select * from bot_auto_release();',
+      options: {}
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ psid: '7842910', quiet_hours: 30 }]
 });
 
 const ghlSchedule = trigger({
@@ -821,6 +1091,29 @@ const noteGhl = sticky(
   [], { name: 'note C4', position: [820, 1900], width: 360, height: 260, color: 3 }
 );
 
+const bandD = sticky(
+  '## D · The SLA sweep\n' +
+  'Every 10 minutes. Chases escalations nobody has answered, and returns finished threads to the bot.\n\n' +
+  'Without this, an escalation is just a row in a table that nobody looks at.',
+  [], { name: 'Band D', position: [-540, 2260], width: 420, height: 240, color: 4 }
+);
+
+const noteHuman = sticky(
+  '### B5a · The handoff, for free\n' +
+  'Meta stamps replies typed in the **Facebook Page inbox** with app id `263902037430900`.\n\n' +
+  'So an echo carrying that id is proof a human picked the thread up. No button, no second app, no polling — the signal was already arriving on the webhook, Phase 3 was just throwing it away.\n\n' +
+  'Meta also applies the `HUMAN_AGENT` tag to inbox replies automatically, which extends the reply window from 24 hours to 7 days. Answering where you always would is also the compliant thing to do.',
+  [], { name: 'note B5a', position: [1080, -80], width: 400, height: 320, color: 6 }
+);
+
+const noteEscalate = sticky(
+  '### B19–B21 · Escalating without the model\n' +
+  '"Can I talk to a person" should reach a person whether or not the model agrees, and should not cost two cents to process.\n\n' +
+  'The rules live in the `escalation_rules` table, so the owner adds one when they spot a gap — editable in NocoDB alongside the knowledge base.\n\n' +
+  'The replies here are fixed strings. A customer who just said "I want a refund" needs a fast, predictable answer, not a generated one.',
+  [], { name: 'note B19', position: [1660, 1180], width: 400, height: 300, color: 3 }
+);
+
 export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   .add(verifyHook)
   .to(buildChallenge)
@@ -832,22 +1125,37 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   .add(messageHook)
   .to(computeSignature)
   .to(normalize)
-  .to(keepReal)
-  .to(botGate)
-  .to(gateAllows
-    .onFalse(stopQuietly)
-    .onTrue(
-      typingOn
-        .to(loadKnowledge)
-        .to(buildContext)
-        .to(bot)
-        .to(readVerdict)
-        .to(recordReply)
-        .to(sendReply)
-        .to(wasAnswered
-          .onTrue(answeredEnd)
-          .onFalse(notifyOwner))
-    ))
+  .to(routeEvent
+    .onCase(0,
+      botGate
+        .to(routeDecision
+          .onCase(0,
+            buildEscalationReply
+              .to(recordEscalation)
+              .to(sendEscalationReply)
+              .to(alertFromRule.to(sendAlert)))
+          .onCase(1,
+            typingOn
+              .to(loadKnowledge)
+              .to(buildContext)
+              .to(bot)
+              .to(readVerdict)
+              .to(recordReply)
+              .to(sendReply)
+              .to(wasAnswered
+                .onTrue(answeredEnd)
+                .onFalse(alertFromModel.to(sendAlert))))
+          .onCase(2, stopQuietly)))
+    .onCase(1, recordHumanReply)
+    .onCase(2, droppedEvent))
+
+  .add(sweepSchedule)
+  .to(findOverdue)
+  .to(chaseTeam)
+  .to(markChased)
+
+  .add(sweepSchedule)
+  .to(autoRelease)
 
   .add(ghlSchedule)
   .to(findUnsynced)
@@ -858,17 +1166,24 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   ))
 
   .add(readmeNote)
-  .add(bandA).add(bandB).add(bandC)
+  .add(bandA).add(bandB).add(bandC).add(bandD)
   .add(noteAck).add(noteSig).add(noteGate).add(noteAgent).add(noteGhl)
+  .add(noteHuman).add(noteEscalate)
 
   .group('Verification', [buildChallenge, respondChallenge], {
     description: 'Answers the one-time challenge Meta sends when you click Verify'
   })
-  .group('Guards', [computeSignature, normalize, keepReal, botGate], {
-    description: 'Signature, echo, dedupe and rate limits — everything free, before any model call'
+  .group('Guards', [computeSignature, normalize], {
+    description: 'Signature and echo checks — everything free, before any database or model call'
   })
   .group('Answer', [loadKnowledge, buildContext, bot, claude, chatMemory, verdictParser, readVerdict], {
     description: 'Loads the knowledge base and answers from it, or declines and escalates'
+  })
+  .group('Handover', [buildEscalationReply, recordEscalation, sendEscalationReply, alertFromRule], {
+    description: 'Rule-triggered escalation that never spends a model call'
+  })
+  .group('SLA sweep', [findOverdue, chaseTeam, markChased], {
+    description: 'Chases escalations nobody has answered, once per nudge interval'
   })
   .group('CRM sync', [findUnsynced, ghlLoop, ghlUpsert, ghlNote, saveGhlId, saveGhlError], {
     description: 'Hourly push of contacts and transcripts into GoHighLevel'
