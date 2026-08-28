@@ -5,16 +5,16 @@ owner controls — grounded in that knowledge, escalating to a human when it isn
 and rate-limited so a bad actor cannot run up the model bill.
 
 **Source:** [`messenger-knowledge-bot.ts`](./messenger-knowledge-bot.ts) (n8n Workflow SDK)
-**Schema:** [`001`](../db/001_messenger_bot_schema.sql) · [`003`](../db/003_phase4_escalation.sql) · [`005`](../db/005_editor_surface.sql)
-**Tests:** [`002`](../db/002_schema_tests.sql) (18) · [`004`](../db/004_phase4_tests.sql) (18) · [`006`](../db/006_editor_tests.sql) (14)
+**Schema:** [`001`](../db/001_messenger_bot_schema.sql) · [`003`](../db/003_phase4_escalation.sql) · [`005`](../db/005_editor_surface.sql) · [`007`](../db/007_retrieval.sql)
+**Tests:** [`002`](../db/002_schema_tests.sql) (18) · [`004`](../db/004_phase4_tests.sql) (18) · [`006`](../db/006_editor_tests.sql) (14) · [`008`](../db/008_retrieval_tests.sql) (19)
 **For the owner:** [Teaching your bot](./GUIDE-teaching-your-bot.md) · [NocoDB deployment](../infra/nocodb/)
 
-This is Phases 2 to 5 of the build plan. There is deliberately **no vector
-database** — see [Why no RAG yet](#why-there-is-no-vector-database-yet).
+All six phases of the build plan. Retrieval is built but **ships switched
+off** — see [Retrieval](#retrieval).
 
-## The four flows
+## The five flows
 
-Four independent triggers, so each runs as its own execution and none can take
+Five independent triggers, so each runs as its own execution and none can take
 the others down.
 
 | Flow | Entry point | What it does |
@@ -23,6 +23,7 @@ the others down.
 | **B** Conversation | `POST /webhook/fb-messenger-bot` | The bot. One inbound message, end to end |
 | **C** CRM sync | hourly schedule | Pushes contacts and transcripts into GoHighLevel |
 | **D** SLA sweep | every 10 minutes | Chases unanswered escalations, returns finished threads to the bot |
+| **E** Indexing | every 15 minutes | Chunks and embeds only the documents that changed |
 
 Both webhooks share one path because Meta requires the same URL for verification
 and for events; only the HTTP method differs.
@@ -53,6 +54,20 @@ C1 Hourly → C2 Find unsynced → C3 Loop ─→ C4 Upsert ─┬→ C5 Note �
 
 D1 Every 10 min ─┬→ D2 Overdue escalations → D3 Chase → D4 Record the chase
                  └→ D5 Return quiet threads to the bot
+
+E1 Every 15 min → E2 Stale docs → E3 Loop → E4 Chunk → E5 Embed ─┬→ E6 Pair → E7 Store
+                                                                 └→ E8 Leave stale
+```
+
+Inside Flow B, B10 is where the two knowledge modes diverge and immediately
+converge again:
+
+```
+B9 Typing → B10 Retrieval settings → B10a Retrieval on?
+                        ├ yes → B10b Embed question → B10c Retrieve chunks ─┐
+                        └ no  → B10d Whole knowledge base ──────────────────┤
+                                                                            ↓
+                                                          B11 Assemble context → B12 Claude
 ```
 
 ## Why the Webhook node and not the Facebook Trigger
@@ -235,6 +250,7 @@ deploy.
 psql "$SUPABASE_DB_URL" -f db/001_messenger_bot_schema.sql
 psql "$SUPABASE_DB_URL" -f db/003_phase4_escalation.sql
 psql "$SUPABASE_DB_URL" -f db/005_editor_surface.sql
+psql "$SUPABASE_DB_URL" -f db/007_retrieval.sql   # needs the pgvector extension
 ```
 
 Change `CHANGE_ME_BOT` and `CHANGE_ME_EDITOR` in Section 8 first, or `ALTER ROLE`
@@ -247,10 +263,13 @@ psql "$SCRATCH_DB_URL" -f db/003_phase4_escalation.sql
 psql "$SCRATCH_DB_URL" -f db/005_editor_surface.sql
 psql "$SCRATCH_DB_URL" -f db/002_schema_tests.sql
 psql "$SCRATCH_DB_URL" -f db/004_phase4_tests.sql
+psql "$SCRATCH_DB_URL" -f db/007_retrieval.sql
 psql "$SCRATCH_DB_URL" -f db/006_editor_tests.sql
+psql "$SCRATCH_DB_URL" -f db/008_retrieval_tests.sql
 ```
 
-50 tests, all passing on Postgres 16. All three test files are re-runnable.
+69 tests, all passing on Postgres 16 + pgvector 0.6. All four test files are
+re-runnable.
 
 ### 2. Credentials
 
@@ -262,6 +281,7 @@ Five, all named on the nodes:
 | `Meta Page Access Token` | HTTP Templated Custom Auth | `{"headers":{"Authorization":"Bearer {{api_key}}"}}` |
 | `Supabase — bot_role` | Postgres | `bot_role` connection string |
 | `Anthropic` | Anthropic | Anthropic API key |
+| `OpenAI Embeddings` | HTTP Templated Custom Auth | `{"headers":{"Authorization":"Bearer {{api_key}}"}}` — only needed with retrieval on |
 | `GoHighLevel Private Integration Token` | HTTP Templated Custom Auth | `{"headers":{"Authorization":"Bearer {{api_key}}"}}` |
 
 Three different Meta secrets are involved and they are easy to confuse:
@@ -417,27 +437,127 @@ The bot improves the next message. Nobody deploys anything.
 `answered = false` is the bot working correctly, not failing. Expect an answer
 rate of 50–65% at launch and 80%+ after a few rounds of curation.
 
-## Why there is no vector database yet
+## Retrieval
 
-A knowledge base for one business is realistically 8,000–40,000 tokens. Claude
-Opus 5 holds a million, and prompt caching makes re-reading it cheap. So the
-whole base goes into the system prompt on every message.
+Built, tested, and **shipped switched off**. `retrieval_enabled` is `false`, so
+nothing about the bot's behaviour changes until someone flips one row.
 
-The model sees *everything* rather than a guessed top-five chunks, which is why
-it handles compound questions ("how much is a deep tissue and are you open
-Sunday?") that break naive retrieval. There is no chunking to tune, no embedding
-drift, no re-indexing job.
+That is not hedging. Retrieval is the first change in this build that can make
+answers *worse* rather than merely broken — a bad chunking or a stale index
+degrades quality quietly, with no error anywhere. The only honest response to
+that is a switch you can flip back in seconds.
 
-Add retrieval when one of these is true:
+### When to turn it on
 
-- The knowledge base passes ~100,000 tokens and the Claude line starts to hurt
+While the knowledge base fits in a cached prompt, sending all of it is better:
+the model sees everything rather than a guessed top-six, which is why it
+handles compound questions ("how much is a deep tissue *and* are you open
+Sunday?") that break naive retrieval. Turn retrieval on when one of these is
+true:
+
+- The base passes ~100,000 tokens and the Claude line starts to hurt
 - Hundreds of products or SKUs with individual detail
 - Content changes several times a day, so the cache keeps invalidating
 - **You resell this to multiple clients** — the trigger most likely to fire
 
-`kb_documents.embedding_stale` and the commented `kb_chunks` table at the bottom
-of the schema are already shaped for it, so Phase 6 is additive rather than a
-migration.
+### What it costs, and what it saves
+
+Per message, with a 20,000-token knowledge base:
+
+| | Whole base cached | Retrieval (6 chunks ≈ 3,000 tokens) |
+| --- | --- | --- |
+| Knowledge, cached read | $0.0100 | $0.0015 |
+| History + question | $0.0050 | $0.0050 |
+| Reply | $0.0050 | $0.0050 |
+| Question embedding | — | ~$0.0000002 |
+| **Per message** | **≈ $0.020** | **≈ $0.012** |
+
+At 2,500 messages/month that is $50 against $30 — not worth the moving parts.
+At 10,000 it is $200 against $115, and the two days of build pay for
+themselves in a month. `select * from v_daily_spend;` tells you which side of
+that line you are on.
+
+### How search actually works
+
+Hybrid: pgvector cosine similarity **fused with Postgres full-text**, combined
+by Reciprocal Rank Fusion.
+
+Pure vector search is bad at exact tokens — prices, "HMO", "GCash", a product
+code — which is precisely what customers ask about. Keyword search is bad at
+paraphrase. Neither alone is enough, and their scores are not on comparable
+scales, so fusion is by **rank** rather than by score.
+
+Test R8 makes the case concretely. A customer asks *"do you accept HMO cards"*
+with a query vector pointing nowhere near the HMO document:
+
+| Document | Vector rank | Keyword rank | Fused score |
+| --- | --- | --- | --- |
+| HMO policy | 2 | **1** | **0.0325** |
+| Opening hours | 1 | — | 0.0164 |
+
+Pure vector search would have answered with the opening hours. Fusion promotes
+the right document to the top.
+
+### The safety net, precisely
+
+Vector search always returns *something* when the index has rows — the nearest
+chunks, however far away. So `kb_context()` does **not** fall back on a weak
+match; a weak match is handled where it should be, by the model declining from
+thin context and the question landing in the escalation queue.
+
+It falls back when the result set is genuinely **empty**: an index never built,
+an ingestion that never ran, every chunk still awaiting a vector. Without that,
+those cases would hand the model zero context, make it decline every question,
+and escalate the entire inbox — a quiet indexing problem surfacing as a visible
+outage. Asserted by R17b.
+
+### Indexing
+
+Flow E runs every 15 minutes and only touches documents that changed.
+`kb_ingestion_pending()` defines "changed" in SQL rather than in the workflow,
+so the two cannot drift: never indexed, edited since last index, or embedded
+with a different model than the one configured.
+
+Chunking is **in SQL and deterministic** (R4). A Code node producing slightly
+different chunks on a retry would leave the index quietly disagreeing with the
+document it came from. Headings are prepended to the embedded text, because a
+naked chunk retrieves badly — "PHP 1,800 for 60 minutes" is ambiguous without
+"Deep tissue massage pricing" attached.
+
+`kb_store_chunks()` replaces a document's index in one transaction and refuses
+two things loudly rather than corrupting quietly: a **zero-chunk payload**
+(which would silently remove the document from search) and a **dimension
+mismatch** (which would mix vector shapes in one index). R9 and R10.
+
+Delete-then-insert, not upsert: a re-chunk can produce *fewer* chunks than
+before, and an upsert would leave the extras behind, still matching searches.
+R11.
+
+🔒 **The lock-in.** Embedding models are dimension-locked and not
+interchangeable. Changing `embedding_model` means re-embedding everything —
+which is why that config row is the mechanism: change it, and every document
+becomes pending with `reason = 'model_changed'`, so the re-index is a resumable
+background sweep rather than a manual rebuild. R13.
+
+### Watching it
+
+```sql
+select * from v_retrieval_health;
+```
+
+Retrieval fails quietly — a stale index does not raise, it just answers
+slightly worse. Watch `chunks_missing_vectors`, `docs_awaiting_reindex`, and
+especially `distinct_models`: anything above 1 means two embedding generations
+are in the same index and results are meaningless until the sweep finishes.
+
+### Turning it off
+
+```sql
+update bot_config set value = 'false' where key = 'retrieval_enabled';
+```
+
+Takes effect on the next message. The chunks stay indexed, so turning it back
+on costs nothing.
 
 ## Known gaps
 
@@ -453,3 +573,11 @@ migration.
   revisit if this is resold.
 - **`assigned_to` is unused.** The column exists for a queue UI that does not
   exist yet; today an escalation belongs to whoever gets to the inbox first.
+- **No reranker.** The plan called for retrieve-20-then-rerank with Cohere,
+  which is usually a bigger quality jump than any prompt tweak. Hybrid fusion
+  is in; the rerank step is not, and is the obvious next improvement if
+  retrieval quality disappoints.
+- **Retrieval quality is untested against real content.** The 19 tests prove
+  the plumbing — determinism, staleness, fusion, the guards. Whether six chunks
+  is the right `top_k` for your knowledge base is a question only real traffic
+  answers.

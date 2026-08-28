@@ -473,25 +473,104 @@ const typingOn = node({
   output: [{ recipient_id: '7842910' }]
 });
 
-const loadKnowledge = node({
+const retrievalSettings = node({
   type: 'n8n-nodes-base.postgres',
   version: 2.7,
   config: {
-    name: 'B10 Load Published Knowledge',
+    name: 'B10 Retrieval Settings',
     position: [1960, 480],
     parameters: {
       operation: 'executeQuery',
-      // RLS already restricts bot_role to published rows. The WHERE clause is
-      // belt and braces, and it documents the intent at the call site.
-      query: "select title, category, body from kb_documents where status = 'published' order by sort_order, title;",
+      query: "select (select value from bot_config where key = 'retrieval_enabled')::boolean as enabled, (select value from bot_config where key = 'embedding_model') as model;",
       options: {}
     },
     credentials: { postgres: newCredential('Supabase — bot_role') }
   },
-  output: [
-    { title: 'Opening hours', category: 'general', body: 'We are open 10:00am to 8:00pm, seven days a week.' },
-    { title: 'Deep tissue massage pricing', category: 'pricing', body: 'Deep tissue is PHP 1,800 for 60 minutes.' }
-  ]
+  output: [{ enabled: false, model: 'text-embedding-3-small' }]
+});
+
+const useRetrieval = ifElse({
+  version: 2.3,
+  config: {
+    name: 'B10a Retrieval On?',
+    position: [2160, 480],
+    parameters: {
+      conditions: {
+        options: { caseSensitive: true, leftValue: '', typeValidation: 'loose' },
+        conditions: [
+          { leftValue: expr('{{ $json.enabled }}'), operator: { type: 'boolean', operation: 'true', singleValue: true } }
+        ],
+        combinator: 'and'
+      }
+    }
+  }
+});
+
+const embedQuestion = node({
+  type: 'n8n-nodes-base.httpRequest',
+  version: 4.5,
+  config: {
+    name: 'B10b Embed The Question',
+    position: [2360, 380],
+    // If embedding fails, the chain still reaches B10c with no vector, and
+    // kb_context falls back to the full knowledge base. A dead embedding API
+    // must not become a dead bot.
+    onError: 'continueRegularOutput',
+    parameters: {
+      method: 'POST',
+      url: 'https://api.openai.com/v1/embeddings',
+      authentication: 'genericCredentialType',
+      genericAuthType: 'httpTemplatedCustomAuth',
+      sendBody: true,
+      contentType: 'json',
+      specifyBody: 'json',
+      jsonBody: expr('{{ JSON.stringify({ model: $json.model, input: $(\'B6 Rate Limit And Dedupe Gate\').item.json.clean_text }) }}'),
+      options: { timeout: 8000 }
+    },
+    credentials: { httpTemplatedCustomAuth: newCredential('OpenAI Embeddings') }
+  },
+  output: [{ data: [{ embedding: [0.01, 0.02] }] }]
+});
+
+const contextRetrieved = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'B10c Retrieve Relevant Chunks',
+    position: [2560, 380],
+    parameters: {
+      operation: 'executeQuery',
+      // kb_context returns the same shape in both modes, so B11 downstream has
+      // no branch to keep in sync. If the index is empty it falls back to the
+      // full knowledge base rather than handing the model nothing.
+      query: 'select title, category, body, source from kb_context($1::vector, $2);',
+      options: {
+        queryReplacement: expr("{{ JSON.stringify($json.data ? $json.data[0].embedding : null) }},{{ $('B6 Rate Limit And Dedupe Gate').item.json.clean_text }}")
+      }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ title: 'Deep tissue massage pricing', category: 'pricing', body: 'PHP 1,800 for 60 minutes.', source: 'retrieval' }]
+});
+
+const contextFull = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'B10d Send The Whole Knowledge Base',
+    position: [2560, 580],
+    parameters: {
+      operation: 'executeQuery',
+      // Retrieval off: same function, no vector. This is the default and stays
+      // the right answer while the knowledge base fits in a cached prompt.
+      query: 'select title, category, body, source from kb_context(null, $1);',
+      options: {
+        queryReplacement: expr("{{ $('B6 Rate Limit And Dedupe Gate').item.json.clean_text }}")
+      }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ title: 'Opening hours', category: 'general', body: 'We are open 10:00am to 8:00pm.', source: 'full' }]
 });
 
 const buildContext = node({
@@ -499,11 +578,13 @@ const buildContext = node({
   version: 2,
   config: {
     name: 'B11 Assemble Prompt Context',
-    position: [2240, 480],
+    position: [2820, 480],
     parameters: {
       mode: 'runOnceForAllItems',
       language: 'javaScript',
-      jsCode: `const docs = $('B10 Load Published Knowledge').all();
+      jsCode: `// $input, not a named node: either B10c or B10d ran, never both,
+// and both emit the same shape. Naming one would break on the other's path.
+const docs = $input.all();
 const gate = $('B6 Rate Limit And Dedupe Gate').first().json;
 const msg = $('B4 Verify Signature And Normalize').first().json;
 
@@ -526,9 +607,12 @@ for (let i = history.length - 1; i >= 0; i--) {
   recent.push((h.direction === 'inbound' ? 'Customer: ' : 'You: ') + h.body);
 }
 
+const mode = docs.length > 0 ? (docs[0].json.source || 'full') : 'full';
+
 return [{ json: {
   psid: msg.psid,
   knowledge: knowledge,
+  knowledge_mode: mode,
   knowledge_docs: docs.length,
   knowledge_chars: knowledge.length,
   history_text: recent.join('\\n'),
@@ -538,7 +622,7 @@ return [{ json: {
 }}];`
     }
   },
-  output: [{ psid: '7842910', knowledge: '### Opening hours [general]\nWe are open 10:00am to 8:00pm.', knowledge_docs: 2, knowledge_chars: 240, history_text: '', question: 'magkano ang deep tissue?', is_new_contact: true, attachment_only: false }]
+  output: [{ psid: '7842910', knowledge: '### Opening hours [general]\nWe are open 10:00am to 8:00pm.', knowledge_mode: 'full', knowledge_docs: 2, knowledge_chars: 240, history_text: '', question: 'magkano ang deep tissue?', is_new_contact: true, attachment_only: false }]
 });
 
 const claude = languageModel({
@@ -857,6 +941,167 @@ const autoRelease = node({
   output: [{ psid: '7842910', quiet_hours: 30 }]
 });
 
+const ingestSchedule = trigger({
+  type: 'n8n-nodes-base.scheduleTrigger',
+  version: 1.2,
+  config: {
+    name: 'E1 Every 15 Minutes',
+    position: [0, 3100],
+    parameters: { rule: { interval: [{ field: 'minutes', minutesInterval: 15 }] } }
+  },
+  output: [{}]
+});
+
+const findStaleDocs = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'E2 Documents Needing Indexing',
+    position: [280, 3100],
+    parameters: {
+      operation: 'executeQuery',
+      // What counts as stale lives in SQL, not here, so this workflow cannot
+      // drift from the definition. Covers never-indexed, edited since last
+      // index, and embedded with a different model than the one configured.
+      query: 'select * from kb_ingestion_pending(20);',
+      options: {}
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ document_id: '0b7f1c2e-1111-4444-8888-aaaaaaaaaaaa', title: 'Deep tissue massage pricing', category: 'pricing', reason: 'edited' }]
+});
+
+const ingestLoop = splitInBatches({
+  version: 3,
+  config: { name: 'E3 One Document At A Time', position: [560, 3100], parameters: { batchSize: 1, options: {} } }
+});
+
+const chunkDoc = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'E4 Split Into Chunks',
+    position: [840, 3200],
+    parameters: {
+      operation: 'executeQuery',
+      // Chunking is done in SQL so it is deterministic. A Code node that
+      // produced slightly different chunks on a retry would leave the index
+      // silently disagreeing with the document it came from.
+      query: 'select chunk_index, heading, chunk_text, embed_input from kb_chunk_document($1::uuid) order by chunk_index;',
+      options: { queryReplacement: expr("{{ $('E3 One Document At A Time').item.json.document_id }}") }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ chunk_index: 0, heading: 'Deep tissue massage pricing', chunk_text: 'PHP 1,800 for 60 minutes.', embed_input: 'Deep tissue massage pricing\nPHP 1,800 for 60 minutes.' }]
+});
+
+const embedChunks = node({
+  type: 'n8n-nodes-base.httpRequest',
+  version: 4.5,
+  config: {
+    name: 'E5 Embed Every Chunk',
+    position: [1120, 3200],
+    // One request for the whole document, not one per chunk.
+    executeOnce: true,
+    onError: 'continueErrorOutput',
+    parameters: {
+      method: 'POST',
+      url: 'https://api.openai.com/v1/embeddings',
+      authentication: 'genericCredentialType',
+      genericAuthType: 'httpTemplatedCustomAuth',
+      sendBody: true,
+      contentType: 'json',
+      specifyBody: 'json',
+      jsonBody: expr("{{ JSON.stringify({ model: 'text-embedding-3-small', input: $('E4 Split Into Chunks').all().map(i => i.json.embed_input) }) }}"),
+      options: { timeout: 60000 }
+    },
+    credentials: { httpTemplatedCustomAuth: newCredential('OpenAI Embeddings') }
+  },
+  output: [{ data: [{ index: 0, embedding: [0.01, 0.02] }], model: 'text-embedding-3-small' }]
+});
+
+const buildChunkPayload = node({
+  type: 'n8n-nodes-base.code',
+  version: 2,
+  config: {
+    name: 'E6 Pair Chunks With Vectors',
+    position: [1400, 3200],
+    parameters: {
+      mode: 'runOnceForAllItems',
+      language: 'javaScript',
+      jsCode: `const chunks = $('E4 Split Into Chunks').all();
+const res = $input.first().json;
+const vectors = res.data || [];
+
+if (chunks.length !== vectors.length) {
+  throw new Error('Got ' + vectors.length + ' embeddings for ' + chunks.length +
+    ' chunks. Refusing to store a partial index.');
+}
+
+// OpenAI returns an "index" field; trust it rather than array position, so a
+// reordered response cannot silently attach the wrong vector to a chunk.
+const byIndex = {};
+for (let i = 0; i < vectors.length; i++) {
+  byIndex[vectors[i].index === undefined ? i : vectors[i].index] = vectors[i].embedding;
+}
+
+const payload = [];
+for (let i = 0; i < chunks.length; i++) {
+  const c = chunks[i].json;
+  const vec = byIndex[i];
+  if (!vec) { throw new Error('No embedding for chunk ' + i); }
+  payload.push({
+    chunk_index: c.chunk_index,
+    heading: c.heading,
+    chunk_text: c.chunk_text,
+    embed_input: c.embed_input,
+    embedding: vec
+  });
+}
+
+// Base64 because n8n passes query parameters as a comma-separated string, and
+// a JSON array of floats is nothing but commas. The alternative — building SQL
+// by concatenation from knowledge-base content — is an injection waiting to
+// happen.
+return [{ json: {
+  document_id: $('E3 One Document At A Time').first().json.document_id,
+  model: res.model || 'text-embedding-3-small',
+  chunk_count: payload.length,
+  payload_b64: Buffer.from(JSON.stringify(payload), 'utf8').toString('base64')
+}}];`
+    }
+  },
+  output: [{ document_id: '0b7f1c2e-1111-4444-8888-aaaaaaaaaaaa', model: 'text-embedding-3-small', chunk_count: 1, payload_b64: 'W3siY2h1bmtfaW5kZXgiOjB9XQ==' }]
+});
+
+const storeChunks = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'E7 Replace The Index For This Document',
+    position: [1680, 3200],
+    parameters: {
+      operation: 'executeQuery',
+      // Delete-then-insert in one transaction, then clear the stale flag.
+      // Refuses a zero-chunk payload and a dimension mismatch, so a bad run
+      // fails loudly instead of quietly removing a document from search.
+      query: 'select kb_store_chunks_b64($1::uuid, $2, $3) as chunks_stored;',
+      options: {
+        queryReplacement: expr('{{ $json.document_id }},{{ $json.payload_b64 }},{{ $json.model }}')
+      }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ chunks_stored: 1 }]
+});
+
+const ingestFailed = node({
+  type: 'n8n-nodes-base.noOp',
+  version: 1,
+  config: { name: 'E8 Leave It Stale For The Next Sweep', position: [1400, 3420] },
+  output: [{}]
+});
+
 const ghlSchedule = trigger({
   type: 'n8n-nodes-base.scheduleTrigger',
   version: 1.2,
@@ -1114,6 +1359,30 @@ const noteEscalate = sticky(
   [], { name: 'note B19', position: [1660, 1180], width: 400, height: 300, color: 3 }
 );
 
+const bandE = sticky(
+  '## E · Indexing\n' +
+  'Every 15 minutes, and only for documents that actually changed.\n\n' +
+  'Separate from the conversation on purpose: embedding is slow and occasionally fails, and neither should ever be in the path of a customer waiting for an answer.',
+  [], { name: 'Band E', position: [-540, 3060], width: 420, height: 240, color: 5 }
+);
+
+const noteRetrieval = sticky(
+  '### B10 · Two modes, one shape\n' +
+  '`kb_context()` returns the same columns whichever mode is on, so B11 downstream has no branch to keep in sync and switching is genuinely a config edit.\n\n' +
+  '**Ships OFF.** The whole knowledge base in a cached prompt is the right answer until it outgrows one — see the README for the four triggers that change that.\n\n' +
+  'If the index is empty, `kb_context` returns the full base rather than nothing. Handing the model zero context would make it decline every question and escalate the entire inbox — a quiet indexing problem surfacing as a visible outage.',
+  [], { name: 'note B10', position: [1900, 100], width: 420, height: 340, color: 3 }
+);
+
+const noteIngest = sticky(
+  '### E4–E7 · Why chunking is SQL\n' +
+  'It has to be **deterministic**. A Code node that produced slightly different chunks on a retry would leave the index quietly disagreeing with the document it came from.\n\n' +
+  'E5 embeds the whole document in one request, not one per chunk.\n\n' +
+  'E7 replaces the index for that document in one transaction — delete-then-insert, not upsert, because a re-chunk can produce *fewer* chunks and an upsert would leave the extras behind still matching searches.\n\n' +
+  '⚠️ The payload is base64 because n8n passes query parameters as a comma-separated string, and a JSON array of floats is nothing but commas.',
+  [], { name: 'note E4', position: [820, 3480], width: 420, height: 360, color: 3 }
+);
+
 export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   .add(verifyHook)
   .to(buildChallenge)
@@ -1136,16 +1405,22 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
               .to(alertFromRule.to(sendAlert)))
           .onCase(1,
             typingOn
-              .to(loadKnowledge)
-              .to(buildContext)
-              .to(bot)
-              .to(readVerdict)
-              .to(recordReply)
-              .to(sendReply)
-              .to(wasAnswered
-                .onTrue(answeredEnd)
-                .onFalse(alertFromModel.to(sendAlert))))
+              .to(retrievalSettings)
+              .to(useRetrieval
+                .onTrue(embedQuestion.to(contextRetrieved.to(buildContext)))
+                .onFalse(contextFull.to(buildContext))))
           .onCase(2, stopQuietly)))
+
+  // Both retrieval branches converge on buildContext, so everything after it
+  // is declared once here rather than duplicated down each branch.
+  .add(buildContext)
+  .to(bot)
+  .to(readVerdict)
+  .to(recordReply)
+  .to(sendReply)
+  .to(wasAnswered
+    .onTrue(answeredEnd)
+    .onFalse(alertFromModel.to(sendAlert)))
     .onCase(1, recordHumanReply)
     .onCase(2, droppedEvent))
 
@@ -1156,6 +1431,15 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
 
   .add(sweepSchedule)
   .to(autoRelease)
+
+  .add(ingestSchedule)
+  .to(findStaleDocs)
+  .to(ingestLoop.onEachBatch(
+    chunkDoc
+      .to(embedChunks
+        .to(buildChunkPayload.to(storeChunks))
+        .onError(ingestFailed))
+  ))
 
   .add(ghlSchedule)
   .to(findUnsynced)
@@ -1169,6 +1453,7 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   .add(bandA).add(bandB).add(bandC).add(bandD)
   .add(noteAck).add(noteSig).add(noteGate).add(noteAgent).add(noteGhl)
   .add(noteHuman).add(noteEscalate)
+  .add(bandE).add(noteRetrieval).add(noteIngest)
 
   .group('Verification', [buildChallenge, respondChallenge], {
     description: 'Answers the one-time challenge Meta sends when you click Verify'
@@ -1176,8 +1461,11 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   .group('Guards', [computeSignature, normalize], {
     description: 'Signature and echo checks — everything free, before any database or model call'
   })
-  .group('Answer', [loadKnowledge, buildContext, bot, claude, chatMemory, verdictParser, readVerdict], {
-    description: 'Loads the knowledge base and answers from it, or declines and escalates'
+  .group('Answer', [retrievalSettings, useRetrieval, embedQuestion, contextRetrieved, contextFull, buildContext, bot, claude, chatMemory, verdictParser, readVerdict], {
+    description: 'Assembles context — retrieved or whole — and answers from it, or declines'
+  })
+  .group('Indexing', [chunkDoc, embedChunks, buildChunkPayload, storeChunks, ingestFailed], {
+    description: 'Chunks and embeds only the documents that changed'
   })
   .group('Handover', [buildEscalationReply, recordEscalation, sendEscalationReply, alertFromRule], {
     description: 'Rule-triggered escalation that never spends a model call'
