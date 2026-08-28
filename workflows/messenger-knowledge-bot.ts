@@ -792,6 +792,10 @@ const sendReply = node({
   config: {
     name: 'B15 Send Reply To Messenger',
     position: [3360, 480],
+    // A failed send must reach B15a so the reply is recorded as UNDELIVERED.
+    // Letting this throw would leave the database claiming the customer was
+    // answered when they got nothing.
+    onError: 'continueErrorOutput',
     parameters: {
       method: 'POST',
       url: 'https://graph.facebook.com/v21.0/me/messages',
@@ -806,6 +810,45 @@ const sendReply = node({
     credentials: { httpTemplatedCustomAuth: newCredential('Meta Page Access Token') }
   },
   output: [{ recipient_id: '7842910', message_id: 'm_xyz' }]
+});
+
+const markDelivered = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'B15a Confirm Delivery',
+    position: [3640, 400],
+    parameters: {
+      operation: 'executeQuery',
+      query: 'select bot_mark_delivered($1::bigint, true) as ok;',
+      options: {
+        queryReplacement: expr("{{ $('B14 Log Reply And Open Escalation').item.json.message_id }}")
+      }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ ok: true }]
+});
+
+const markUndelivered = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'B15b Record Failed Delivery',
+    position: [3640, 700],
+    parameters: {
+      operation: 'executeQuery',
+      // Also raises a CRITICAL ops event by itself. An expired Page Access
+      // Token surfaces here first, and this is what turns it into an alert
+      // instead of a slowly-growing pile of customers who were ignored.
+      query: 'select bot_mark_delivered($1::bigint, false, $2) as ok;',
+      options: {
+        queryReplacement: expr("{{ $('B14 Log Reply And Open Escalation').item.json.message_id }},{{ ($json.error && $json.error.message) || 'Messenger send failed' }}")
+      }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ ok: true }]
 });
 
 const wasAnswered = ifElse({
@@ -1102,6 +1145,185 @@ const ingestFailed = node({
   output: [{}]
 });
 
+const errorTrigger = trigger({
+  type: 'n8n-nodes-base.errorTrigger',
+  version: 1,
+  config: { name: 'F1 Something Threw', position: [0, 3900] },
+  output: [{
+    execution: { id: '4821', error: { message: 'Anthropic returned 529', name: 'NodeApiError' }, lastNodeExecuted: 'B12 Answer From Knowledge Base', url: 'https://n8n.example/execution/4821' },
+    workflow: { id: 'messenger-knowledge-bot', name: 'Messenger Knowledge Bot' }
+  }]
+});
+
+const classifyFailure = node({
+  type: 'n8n-nodes-base.code',
+  version: 2,
+  config: {
+    name: 'F2 Work Out What Broke',
+    position: [280, 3900],
+    parameters: {
+      mode: 'runOnceForAllItems',
+      language: 'javaScript',
+      jsCode: `const e = $input.first().json || {};
+const ex = e.execution || {};
+const err = ex.error || e.error || {};
+const node = String(ex.lastNodeExecuted || 'unknown');
+const msg = String(err.message || 'Unknown failure');
+
+// Group by WHICH DEPENDENCY failed rather than by which node happened to
+// notice. Anthropic being down looks different depending on where it lands,
+// but it is one problem and deserves one alert.
+let source = 'workflow';
+let code = 'node_failed';
+let severity = 'error';
+let human = msg;
+
+if (/B12|Claude|anthropic/i.test(node + ' ' + msg)) {
+  source = 'anthropic'; code = 'model_unavailable'; severity = 'critical';
+  human = 'Claude is not responding, so no customer is getting an answer right now. ' + msg;
+} else if (/graph\.facebook|B15|B21|B9 Show Typing/i.test(node + ' ' + msg)) {
+  source = 'messenger'; code = 'graph_api_failed'; severity = 'critical';
+  human = 'The Meta Graph API rejected a request. Usually an expired Page Access Token or a revoked permission. ' + msg;
+} else if (/postgres|supabase|B6 Rate Limit|B14/i.test(node + ' ' + msg)) {
+  source = 'database'; code = 'db_unavailable'; severity = 'critical';
+  human = 'The database is unreachable, which stops everything. ' + msg;
+} else if (/openai|embed|E5/i.test(node + ' ' + msg)) {
+  source = 'embeddings'; code = 'embedding_failed'; severity = 'warning';
+  human = 'Embedding failed. Indexing is behind, but answers still work — retrieval falls back to the full knowledge base. ' + msg;
+} else if (/leadconnector|GoHighLevel|C4|C5/i.test(node + ' ' + msg)) {
+  source = 'gohighlevel'; code = 'crm_sync_failed'; severity = 'warning';
+  human = 'GoHighLevel sync failed. Customers are unaffected; contacts will retry next hour. ' + msg;
+}
+
+return [{ json: {
+  source: source,
+  code: code,
+  severity: severity,
+  human: human,
+  node: node,
+  execution_url: String(ex.url || ''),
+  context: JSON.stringify({ node: node, execution_id: String(ex.id || ''), error_name: String(err.name || '') })
+}}];`
+    }
+  },
+  output: [{ source: 'anthropic', code: 'model_unavailable', severity: 'critical', human: 'Claude is not responding.', node: 'B12 Answer From Knowledge Base', execution_url: 'https://n8n.example/execution/4821', context: '{}' }]
+});
+
+const logFailure = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'F3 Record It',
+    position: [560, 3900],
+    parameters: {
+      operation: 'executeQuery',
+      // Collapses onto the open event with the same fingerprint, so an outage
+      // firing every few minutes is one row with a rising count rather than
+      // hundreds of rows and hundreds of alerts.
+      query: 'select bot_log_event($1, $2, $3, $4, $5::jsonb) as event_id;',
+      options: {
+        queryReplacement: expr('{{ $json.source }},{{ $json.code }},{{ $json.human }},{{ $json.severity }},{{ $json.context }}')
+      }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ event_id: 91 }]
+});
+
+const healthSchedule = trigger({
+  type: 'n8n-nodes-base.scheduleTrigger',
+  version: 1.2,
+  config: {
+    name: 'G1 Every 30 Minutes',
+    position: [0, 4300],
+    parameters: { rule: { interval: [{ field: 'minutes', minutesInterval: 30 }] } }
+  },
+  output: [{}]
+});
+
+const runHealthChecks = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'G2 Run Every Health Check',
+    position: [280, 4300],
+    parameters: {
+      operation: 'executeQuery',
+      // Six checks in one call: inbound traffic, delivery, error rate, spend,
+      // index health, escalation backlog. Failures become ops events and
+      // recoveries auto-resolve — the workflow does no judging of its own.
+      //
+      // The traffic check is the one that catches an expired token or a
+      // dropped webhook subscription, which produce NO error anywhere and
+      // would otherwise run for days.
+      query: 'select * from bot_run_health_checks();',
+      options: {}
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ check_name: 'inbound_traffic', status: 'ok', detail: 'Last inbound 2026-08-28 09:14' }]
+});
+
+const pendingAlerts = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'G3 Anything Worth Saying?',
+    position: [560, 4300],
+    executeOnce: true,
+    parameters: {
+      operation: 'executeQuery',
+      // Only unresolved errors and criticals, and only if the repeat interval
+      // has elapsed since the last time this exact problem was announced.
+      query: 'select * from bot_pending_alerts();',
+      options: {}
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ event_id: 91, severity: 'critical', source: 'messenger', code: 'send_failed', message: 'A reply could not be delivered.', occurrences: 4, first_seen_at: '2026-08-28T09:00:00.000Z', context: {} }]
+});
+
+const alertLoop = splitInBatches({
+  version: 3,
+  config: { name: 'G4 One Alert At A Time', position: [840, 4300], parameters: { batchSize: 1, options: {} } }
+});
+
+const sendOpsAlert = node({
+  type: 'n8n-nodes-base.httpRequest',
+  version: 4.5,
+  config: {
+    name: 'G5 Tell The Admin',
+    position: [1120, 4400],
+    onError: 'continueRegularOutput',
+    parameters: {
+      method: 'POST',
+      url: placeholder('Where operational alerts go — Slack webhook, or anything that reaches you out of hours'),
+      sendBody: true,
+      contentType: 'json',
+      specifyBody: 'json',
+      jsonBody: expr('{{ JSON.stringify({ text: ($json.severity === "critical" ? ":rotating_light: CRITICAL" : ":warning: Warning") + " — " + $json.source + "/" + $json.code + "\n\n" + $json.message + "\n\nSeen " + $json.occurrences + " time(s) since " + $json.first_seen_at }) }}'),
+      options: { timeout: 8000 }
+    }
+  },
+  output: [{ ok: true }]
+});
+
+const markAlerted = node({
+  type: 'n8n-nodes-base.postgres',
+  version: 2.7,
+  config: {
+    name: 'G6 Do Not Repeat For An Hour',
+    position: [1400, 4400],
+    parameters: {
+      operation: 'executeQuery',
+      query: 'select bot_mark_alerted($1::bigint) as marked;',
+      options: { queryReplacement: expr("{{ $('G4 One Alert At A Time').item.json.event_id }}") }
+    },
+    credentials: { postgres: newCredential('Supabase — bot_role') }
+  },
+  output: [{ marked: true }]
+});
+
 const ghlSchedule = trigger({
   type: 'n8n-nodes-base.scheduleTrigger',
   version: 1.2,
@@ -1383,6 +1605,45 @@ const noteIngest = sticky(
   [], { name: 'note E4', position: [820, 3480], width: 420, height: 360, color: 3 }
 );
 
+const bandF = sticky(
+  '## F · When something throws\n' +
+  'n8n\'s Error Trigger fires for **any** unhandled failure anywhere in this workflow.\n\n' +
+  'Without it, a failure died in the execution log and nobody was told. That was the gap: everything up to here handled the failures it expected.',
+  [], { name: 'Band F', position: [-540, 3860], width: 420, height: 240, color: 2 }
+);
+
+const bandG = sticky(
+  '## G · The watchdog\n' +
+  'Every 30 minutes, six checks: inbound traffic, delivery, error rate, spend, index health, escalation backlog.\n\n' +
+  'Failures become events; recoveries auto-resolve them. The workflow does no judging of its own — that all lives in SQL.',
+  [], { name: 'Band G', position: [-540, 4260], width: 420, height: 240, color: 2 }
+);
+
+const noteSilence = sticky(
+  '### G2 · Watching for an absence\n' +
+  '**The hardest failure to see, because it looks like success.**\n\n' +
+  'An expired Page token or a dropped webhook subscription produces no error at all. Messages just stop — indistinguishable from a quiet Tuesday.\n\n' +
+  'So the check is *comparative*: alarm only if this window is silent **and** the same clock window on the same weekday normally carried traffic, averaged over four weeks.\n\n' +
+  'A genuinely quiet business never gets paged. A Page whose token expired does.',
+  [], { name: 'note G2', position: [200, 4620], width: 420, height: 320, color: 3 }
+);
+
+const noteThrottle = sticky(
+  '### G3 · Say it once\n' +
+  'Events collapse by fingerprint (`source:code`), so an outage firing every few minutes for six hours is **one row with a rising count**, not 36 alerts.\n\n' +
+  'The queue then re-announces only after `alert_repeat_minutes`.\n\n' +
+  '⚠️ Alerting that fires every cycle gets muted by the people it exists to reach — and then it is worse than nothing.',
+  [], { name: 'note G3', position: [660, 4620], width: 400, height: 280, color: 3 }
+);
+
+const noteDelivery = sticky(
+  '### B15a/b · Answered ≠ received\n' +
+  'B14 used to log the reply and B15 sent it afterwards, so a failed send still counted as **answered**.\n\n' +
+  'The answer rate looked healthy while customers got nothing — the worst kind of failure, because the metric you would check to spot it was the metric that was lying.\n\n' +
+  'Now delivery is confirmed separately. `v_delivery_health` against `v_answer_rate`: when they diverge, delivery is broken, not the model.',
+  [], { name: 'note B15a', position: [3600, 900], width: 420, height: 300, color: 3 }
+);
+
 export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   .add(verifyHook)
   .to(buildChallenge)
@@ -1417,7 +1678,13 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   .to(bot)
   .to(readVerdict)
   .to(recordReply)
-  .to(sendReply)
+  .to(sendReply
+    .onError(markUndelivered))
+
+  // Delivery is confirmed BEFORE the answered check, so "the bot answered"
+  // and "the customer received it" are two separate recorded facts.
+  .add(sendReply)
+  .to(markDelivered)
   .to(wasAnswered
     .onTrue(answeredEnd)
     .onFalse(alertFromModel.to(sendAlert)))
@@ -1431,6 +1698,15 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
 
   .add(sweepSchedule)
   .to(autoRelease)
+
+  .add(errorTrigger)
+  .to(classifyFailure)
+  .to(logFailure)
+
+  .add(healthSchedule)
+  .to(runHealthChecks)
+  .to(pendingAlerts)
+  .to(alertLoop.onEachBatch(sendOpsAlert.to(markAlerted)))
 
   .add(ingestSchedule)
   .to(findStaleDocs)
@@ -1454,6 +1730,7 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   .add(noteAck).add(noteSig).add(noteGate).add(noteAgent).add(noteGhl)
   .add(noteHuman).add(noteEscalate)
   .add(bandE).add(noteRetrieval).add(noteIngest)
+  .add(bandF).add(bandG).add(noteSilence).add(noteThrottle).add(noteDelivery)
 
   .group('Verification', [buildChallenge, respondChallenge], {
     description: 'Answers the one-time challenge Meta sends when you click Verify'
@@ -1466,6 +1743,12 @@ export default workflow('messenger-knowledge-bot', 'Messenger Knowledge Bot')
   })
   .group('Indexing', [chunkDoc, embedChunks, buildChunkPayload, storeChunks, ingestFailed], {
     description: 'Chunks and embeds only the documents that changed'
+  })
+  .group('Failure handling', [classifyFailure, logFailure], {
+    description: 'Catches anything that threw anywhere, groups it by which dependency failed'
+  })
+  .group('Watchdog', [runHealthChecks, pendingAlerts], {
+    description: 'Six health checks including the silence test an expired token would otherwise hide'
   })
   .group('Handover', [buildEscalationReply, recordEscalation, sendEscalationReply, alertFromRule], {
     description: 'Rule-triggered escalation that never spends a model call'

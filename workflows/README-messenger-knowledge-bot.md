@@ -5,16 +5,16 @@ owner controls — grounded in that knowledge, escalating to a human when it isn
 and rate-limited so a bad actor cannot run up the model bill.
 
 **Source:** [`messenger-knowledge-bot.ts`](./messenger-knowledge-bot.ts) (n8n Workflow SDK)
-**Schema:** [`001`](../db/001_messenger_bot_schema.sql) · [`003`](../db/003_phase4_escalation.sql) · [`005`](../db/005_editor_surface.sql) · [`007`](../db/007_retrieval.sql)
-**Tests:** [`002`](../db/002_schema_tests.sql) (18) · [`004`](../db/004_phase4_tests.sql) (18) · [`006`](../db/006_editor_tests.sql) (14) · [`008`](../db/008_retrieval_tests.sql) (19)
+**Schema:** [`001`](../db/001_messenger_bot_schema.sql) · [`003`](../db/003_phase4_escalation.sql) · [`005`](../db/005_editor_surface.sql) · [`007`](../db/007_retrieval.sql) · [`009`](../db/009_ops_and_alerts.sql)
+**Tests:** [`002`](../db/002_schema_tests.sql) (18) · [`004`](../db/004_phase4_tests.sql) (18) · [`006`](../db/006_editor_tests.sql) (14) · [`008`](../db/008_retrieval_tests.sql) (19) · [`010`](../db/010_ops_tests.sql) (16)
 **For the owner:** [Teaching your bot](./GUIDE-teaching-your-bot.md) · [NocoDB deployment](../infra/nocodb/)
 
 All six phases of the build plan. Retrieval is built but **ships switched
 off** — see [Retrieval](#retrieval).
 
-## The five flows
+## The seven flows
 
-Five independent triggers, so each runs as its own execution and none can take
+Seven independent triggers, so each runs as its own execution and none can take
 the others down.
 
 | Flow | Entry point | What it does |
@@ -24,6 +24,8 @@ the others down.
 | **C** CRM sync | hourly schedule | Pushes contacts and transcripts into GoHighLevel |
 | **D** SLA sweep | every 10 minutes | Chases unanswered escalations, returns finished threads to the bot |
 | **E** Indexing | every 15 minutes | Chunks and embeds only the documents that changed |
+| **F** Failure handler | this workflow's own errors | Catches anything that threw, groups it by which dependency failed |
+| **G** Watchdog | every 30 minutes | Six health checks, including the silence test an expired token would hide |
 
 Both webhooks share one path because Meta requires the same URL for verification
 and for events; only the HTTP method differs.
@@ -57,6 +59,10 @@ D1 Every 10 min ─┬→ D2 Overdue escalations → D3 Chase → D4 Record the 
 
 E1 Every 15 min → E2 Stale docs → E3 Loop → E4 Chunk → E5 Embed ─┬→ E6 Pair → E7 Store
                                                                  └→ E8 Leave stale
+
+F1 Error trigger → F2 Classify → F3 Record
+
+G1 Every 30 min → G2 Health checks → G3 Pending alerts → G4 Loop → G5 Alert → G6 Throttle
 ```
 
 Inside Flow B, B10 is where the two knowledge modes diverge and immediately
@@ -251,6 +257,7 @@ psql "$SUPABASE_DB_URL" -f db/001_messenger_bot_schema.sql
 psql "$SUPABASE_DB_URL" -f db/003_phase4_escalation.sql
 psql "$SUPABASE_DB_URL" -f db/005_editor_surface.sql
 psql "$SUPABASE_DB_URL" -f db/007_retrieval.sql   # needs the pgvector extension
+psql "$SUPABASE_DB_URL" -f db/009_ops_and_alerts.sql
 ```
 
 Change `CHANGE_ME_BOT` and `CHANGE_ME_EDITOR` in Section 8 first, or `ALTER ROLE`
@@ -265,10 +272,12 @@ psql "$SCRATCH_DB_URL" -f db/002_schema_tests.sql
 psql "$SCRATCH_DB_URL" -f db/004_phase4_tests.sql
 psql "$SCRATCH_DB_URL" -f db/007_retrieval.sql
 psql "$SCRATCH_DB_URL" -f db/006_editor_tests.sql
+psql "$SCRATCH_DB_URL" -f db/009_ops_and_alerts.sql
 psql "$SCRATCH_DB_URL" -f db/008_retrieval_tests.sql
+psql "$SCRATCH_DB_URL" -f db/010_ops_tests.sql
 ```
 
-69 tests, all passing on Postgres 16 + pgvector 0.6. All four test files are
+85 tests, all passing on Postgres 16 + pgvector 0.6. All five test files are
 re-runnable.
 
 ### 2. Credentials
@@ -389,6 +398,91 @@ told to stay silent. Caught by E13, which now asserts both contacts come back.
 The Supabase connection is added inside NocoDB rather than in `.env`, so a
 production database password is not sitting in a file next to a compose config.
 Connect as `editor_role` — never `postgres` or `service_role`.
+
+## Safety nets
+
+Everything before Phase 7 handled the failures it expected. This section is
+about the ones it did not.
+
+### What can go wrong, and what notices
+
+| Failure | Symptom | What catches it | Customer impact |
+| --- | --- | --- | --- |
+| **Meta token expired** | Nothing arrives. No error anywhere. | G2 silence check | Total — and invisible without this |
+| **Webhook unsubscribed** | Same as above | G2 silence check | Total |
+| **Send rejected by Meta** | Reply logged but never received | B15b, raises `critical` | Per-message, silent before |
+| **Claude down / 529** | Node throws | F1 → `anthropic/model_unavailable` | Total while it lasts |
+| **Database unreachable** | Everything throws | F1 → `database/db_unavailable` | Total |
+| **Embedding API fails** | Indexing falls behind | F1 → `warning`; E8 leaves it stale | None — retrieval falls back |
+| **GoHighLevel down** | Contacts do not sync | C7; F1 → `warning` | None — retries next hour |
+| **Spend cap hit** | Bot refuses new messages | G2 `spend`, warns at 80% first | Total until UTC midnight |
+| **Index has two embedding models** | Answers quietly worse | G2 `retrieval` | Degraded, no error |
+| **Nobody works the queue** | Customers wait | G2 `escalation_backlog` + D3 chases | Slow, per-customer |
+| **Bad escalation rule** | Would have broken every message | Validated on write, self-healing on read | None |
+
+### Answered is not received
+
+The bug this phase fixed: B14 logged the reply and B15 sent it **afterwards**,
+so a failed send still counted as `answered = true`.
+
+The answer rate looked healthy while customers got nothing — the worst kind of
+failure, because the metric you would check to spot it was the metric that was
+lying. Delivery is now confirmed separately:
+
+```sql
+select * from v_answer_rate;      -- what the bot decided
+select * from v_delivery_health;  -- what the customer actually received
+```
+
+When those two diverge, delivery is broken, not the model.
+
+### Watching for an absence
+
+The hardest failure to detect, because it looks exactly like success. An
+expired Page Access Token or a dropped webhook subscription produces no error,
+no failed request, nothing in any log — messages simply stop arriving, which is
+indistinguishable from a quiet Tuesday.
+
+A naive "alert if quiet for six hours" pages you every night. So the check is
+comparative: alarm only if this window is silent **and** the same clock window
+on the same weekday normally carried traffic, averaged over the previous four
+weeks. A business that is genuinely closed on Sundays is never woken up; a Page
+whose token expired is. Tests O11–O13.
+
+### Saying it once
+
+Events collapse by fingerprint (`source:code`), so an outage firing every few
+minutes for six hours is **one row with a rising count**, not hundreds of rows
+and hundreds of alerts. The alert queue then re-announces only after
+`alert_repeat_minutes` (60).
+
+⚠️ This is not polish. Alerting that fires every cycle during an outage gets
+muted by the people it exists to reach, and then it is worse than nothing.
+
+Severity can escalate but never silently downgrade — a single info-level
+recurrence cannot quietly demote a critical (O3). And a resolved problem
+recurring opens a **fresh row** rather than reviving the old one, so "how long
+has this been broken?" stays honest (O6).
+
+### Checking on it yourself
+
+```sql
+select * from bot_health();          -- six verdicts, right now
+select * from ops_events
+ where resolved_at is null
+ order by severity, last_seen_at desc;   -- what is currently broken
+select * from v_delivery_health;     -- are replies actually arriving
+```
+
+### What is still not covered
+
+- **n8n itself being down.** Nothing inside n8n can alert on that. If the bot
+  going dark for hours matters, point an external uptime monitor at the
+  webhook URL — that is the one gap this design cannot close from the inside.
+- **Alerts go to one URL.** No on-call rota, no escalation if the first person
+  does not respond.
+- **No automatic retry of a failed send.** The reply is recorded as undelivered
+  and alerted, but a human re-sends it.
 
 ## Cost
 
