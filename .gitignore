@@ -1,0 +1,4 @@
+# Filled-in environment files — these hold real credentials
+.env
+**/.env
+!**/.env.example

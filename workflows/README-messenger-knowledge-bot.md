@@ -5,10 +5,11 @@ owner controls — grounded in that knowledge, escalating to a human when it isn
 and rate-limited so a bad actor cannot run up the model bill.
 
 **Source:** [`messenger-knowledge-bot.ts`](./messenger-knowledge-bot.ts) (n8n Workflow SDK)
-**Schema:** [`001`](../db/001_messenger_bot_schema.sql) · [`003`](../db/003_phase4_escalation.sql)
-**Tests:** [`002`](../db/002_schema_tests.sql) (18) · [`004`](../db/004_phase4_tests.sql) (18)
+**Schema:** [`001`](../db/001_messenger_bot_schema.sql) · [`003`](../db/003_phase4_escalation.sql) · [`005`](../db/005_editor_surface.sql)
+**Tests:** [`002`](../db/002_schema_tests.sql) (18) · [`004`](../db/004_phase4_tests.sql) (18) · [`006`](../db/006_editor_tests.sql) (14)
+**For the owner:** [Teaching your bot](./GUIDE-teaching-your-bot.md) · [NocoDB deployment](../infra/nocodb/)
 
-This is Phases 2, 3 and 4 of the build plan. There is deliberately **no vector
+This is Phases 2 to 5 of the build plan. There is deliberately **no vector
 database** — see [Why no RAG yet](#why-there-is-no-vector-database-yet).
 
 ## The four flows
@@ -233,6 +234,7 @@ deploy.
 ```bash
 psql "$SUPABASE_DB_URL" -f db/001_messenger_bot_schema.sql
 psql "$SUPABASE_DB_URL" -f db/003_phase4_escalation.sql
+psql "$SUPABASE_DB_URL" -f db/005_editor_surface.sql
 ```
 
 Change `CHANGE_ME_BOT` and `CHANGE_ME_EDITOR` in Section 8 first, or `ALTER ROLE`
@@ -242,11 +244,13 @@ straight afterwards. To verify the guards behave, run the tests against a
 ```bash
 psql "$SCRATCH_DB_URL" -f db/001_messenger_bot_schema.sql
 psql "$SCRATCH_DB_URL" -f db/003_phase4_escalation.sql
+psql "$SCRATCH_DB_URL" -f db/005_editor_surface.sql
 psql "$SCRATCH_DB_URL" -f db/002_schema_tests.sql
 psql "$SCRATCH_DB_URL" -f db/004_phase4_tests.sql
+psql "$SCRATCH_DB_URL" -f db/006_editor_tests.sql
 ```
 
-36 tests, all passing on Postgres 16. Both files are re-runnable.
+50 tests, all passing on Postgres 16. All three test files are re-runnable.
 
 ### 2. Credentials
 
@@ -282,6 +286,89 @@ Meta calls `GET` once to verify, then `POST`s events.
 Public access needs App Review with Advanced Access on `pages_messaging`, which
 needs Business Verification. Budget around 20 days. Page admins and testers can
 message the bot immediately without any of that — build against that first.
+
+## The knowledge editor
+
+Phase 5 hands the knowledge base to someone who is not a developer, which
+changes the threat model: from here, the most likely way this breaks is not an
+attacker, it is a well-meaning owner typing something the database takes
+literally.
+
+### The bug that made this urgent
+
+Phase 4 let an editor put an arbitrary regex into `escalation_rules`, and
+`bot_gate` matched against it with no protection. A single unbalanced bracket —
+`refund(` — made `bot_gate` raise on **every inbound message, for every
+customer**, until someone found the row. Reproduced before writing the fix.
+
+Fixed in two layers, because either alone would only be enough on a good day:
+
+- **On write** — a trigger rejects an invalid pattern, an empty pattern, and a
+  pattern that matches the empty string (which would hand the entire inbox to a
+  human). The error text names the rule and says what to do.
+- **On read** — `bot_gate` now matches rules one at a time, each inside its own
+  exception block. A rule that raises **deactivates itself** and is skipped, so
+  the customer still gets their answer. Read-side tolerance matters even with
+  write-side validation, because rules can arrive by routes the trigger never
+  sees: a restored backup, a direct `COPY`, a migration from another system.
+
+Validation is skipped when a rule is being switched **off**. That is not a
+loophole — it is what makes the self-healing path work. Validating a pattern on
+the way to disabling it would block the fix and re-break the bot. E5 asserts
+exactly this.
+
+### What the owner sees
+
+NocoDB renders whatever table you point it at, so pointing it at `kb_documents`
+would show a uuid primary key, `embedding_stale` and `sort_order` to someone
+who wants to fix a price. Three views sit in between:
+
+| View | Purpose | Writable |
+| --- | --- | --- |
+| `kb_editor` | The knowledge base, friendly column names | Yes |
+| `rules_editor` | Escalation rules | Yes |
+| `queue_editor` | Questions waiting for a human | Read-only |
+
+The first two are single-table projections, which Postgres makes automatically
+updatable — NocoDB reads and writes through them with no extra work, and the
+validation triggers still fire (asserted by E12).
+
+`queue_editor` joins `conversations`, which `editor_role` deliberately cannot
+read. The view runs with `security_invoker = false`, so the editor sees the
+queue without gaining access to the underlying table.
+
+### Closing the loop in one call
+
+```sql
+select * from kb_answer_escalation(
+  <escalation id>,
+  'Home service',
+  'Yes, we offer home service within Metro Manila for an extra PHP 500.',
+  'services');
+```
+
+Publishes the document, resolves **every** open escalation asking that same
+question, and hands **all** of those threads back to the bot.
+
+That last word matters. The first version released only the thread whose id was
+passed in — so a second customer who asked the same thing had their escalation
+closed while their conversation stayed muted, leaving them stranded with a bot
+told to stay silent. Caught by E13, which now asserts both contacts come back.
+
+### Deployment
+
+[`infra/nocodb/`](../infra/nocodb/) has a runnable compose file. Two notes:
+
+- NocoDB is bound to `127.0.0.1` only. Putting a database editor on a public
+  port is how these end up indexed — reach it over an SSH tunnel or behind a
+  reverse proxy with TLS and auth.
+- NocoDB keeps its own metadata in a separate Postgres container, **not** in the
+  Supabase database, so a NocoDB upgrade can never migrate something the bot
+  depends on.
+
+The Supabase connection is added inside NocoDB rather than in `.env`, so a
+production database password is not sitting in a file next to a compose config.
+Connect as `editor_role` — never `postgres` or `service_role`.
 
 ## Cost
 

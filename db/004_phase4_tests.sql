@@ -19,7 +19,10 @@
 delete from escalations  where psid like 'p\_%';
 delete from messages     where psid like 'p\_%';
 delete from conversations where psid like 'p\_%';
-update escalation_rules set active = true;
+-- Undo P6 only. A blanket "set active = true" would also try to reactivate
+-- the deliberately-broken rule db/006 leaves behind, and the Phase 5
+-- validation trigger correctly refuses that.
+update escalation_rules set active = true where label = 'Money dispute';
 
 \echo '=== P1: an ordinary question does NOT force an escalation ==='
 select allow, reason, force_escalate, escalate_reason
@@ -42,10 +45,10 @@ select force_escalate, escalate_reason
   from bot_gate('p_med', 'k5', 'is this safe? i am pregnant', 'Eve');
 
 \echo '=== P6: a disabled rule stops matching ==='
-update escalation_rules set active = false where reason = 'money_dispute';
+update escalation_rules set active = false where label = 'Money dispute';
 select force_escalate, escalate_reason
   from bot_gate('p_money2', 'k6', 'i want a refund now', 'Fay');
-update escalation_rules set active = true where reason = 'money_dispute';
+update escalation_rules set active = true where label = 'Money dispute';
 
 \echo '=== P7: asking the same question 3 times hands over to a human ==='
 select force_escalate, escalate_reason from bot_gate('p_rep', 'r1', 'do you do home service?', 'Gil');

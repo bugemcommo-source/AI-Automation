@@ -1,0 +1,68 @@
+# =============================================================================
+# NocoDB — the knowledge editor for the Messenger bot
+#
+#   cp .env.example .env    # fill it in
+#   docker compose up -d
+#   open http://localhost:8080
+#
+# NocoDB keeps its OWN metadata (users, view layouts, permissions) in the
+# `nocodb_meta` volume. It does not copy your knowledge base — it reads and
+# writes the Supabase rows live, through the editor views. There is no sync
+# job and no second copy of the truth, which is the whole reason this is
+# NocoDB pointed at Postgres rather than a spreadsheet with an importer.
+# =============================================================================
+
+services:
+  nocodb:
+    image: nocodb/nocodb:0.263.6
+    container_name: messenger-bot-editor
+    restart: unless-stopped
+    ports:
+      # Bound to localhost only. Putting a database editor on a public port is
+      # how these end up indexed. To reach it from elsewhere, put it behind a
+      # reverse proxy with TLS and auth, or use an SSH tunnel:
+      #   ssh -L 8080:localhost:8080 you@your-server
+      - "127.0.0.1:8080:8080"
+    environment:
+      # NocoDB's own metadata store. Deliberately NOT the Supabase database —
+      # keeping NocoDB's tables out of the bot's schema means a NocoDB upgrade
+      # can never migrate something the bot depends on.
+      NC_DB: "postgres://${NOCO_META_USER}:${NOCO_META_PASSWORD}@nocodb-meta:5432/nocodb_meta"
+
+      # Signs NocoDB session tokens. Any long random string; changing it logs
+      # everyone out.
+      NC_AUTH_JWT_SECRET: "${NC_AUTH_JWT_SECRET}"
+
+      # The owner's first login. Change the password immediately after.
+      NC_ADMIN_EMAIL: "${NC_ADMIN_EMAIL}"
+      NC_ADMIN_PASSWORD: "${NC_ADMIN_PASSWORD}"
+
+      # Nobody should be able to sign themselves up to your knowledge base.
+      NC_DISABLE_TELE: "true"
+      NC_INVITE_ONLY_SIGNUP: "true"
+    depends_on:
+      nocodb-meta:
+        condition: service_healthy
+    volumes:
+      - nocodb_data:/usr/app/data
+
+  nocodb-meta:
+    image: postgres:16-alpine
+    container_name: messenger-bot-editor-meta
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${NOCO_META_USER}"
+      POSTGRES_PASSWORD: "${NOCO_META_PASSWORD}"
+      POSTGRES_DB: nocodb_meta
+    volumes:
+      - nocodb_meta:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${NOCO_META_USER} -d nocodb_meta"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No ports published. Only NocoDB talks to it, over the compose network.
+
+volumes:
+  nocodb_data:
+  nocodb_meta:
